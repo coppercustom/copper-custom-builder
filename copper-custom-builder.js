@@ -58,19 +58,31 @@ function runModelSearch(key,index,term,append){var pref=state[key].preferences[i
 function scheduleModelSearch(key,index,term){var s=getSearch(key,index);clearTimeout(s.timer);s.term=term;s.loading=true;s.error='';updateModelDropdown(key,index);s.timer=setTimeout(function(){runModelSearch(key,index,term,false);},300);}
 function modelOptionsHtml(key,index){var s=getSearch(key,index),html='';s.rows.forEach(function(item,i){html+='<button type="button" data-model-pick="1" data-section="'+key+'" data-index="'+index+'" data-row="'+i+'">'+esc(item.name)+'</button>';});if(s.loading)html+='<div class="dropdown-status">Searching catalog…</div>';else if(s.error)html+='<div class="dropdown-status">'+esc(s.error)+'</div>';else if(!s.rows.length)html+='<div class="dropdown-status">'+(s.loaded?'No matching catalog models.':'Start typing to search the catalog.')+'</div>';if(s.hasMore&&!s.loading)html+='<button type="button" class="load-more" data-load-more="1" data-section="'+key+'" data-index="'+index+'">Load more models…</button>';return html;}
 function updateModelDropdown(key,index){var input=root.querySelector('[data-model-input="cc-model-'+key+'-'+index+'"]');if(!input)return;var menu=input.closest('.select-wrap').querySelector('.dropdown');if(!menu)return;menu.innerHTML=modelOptionsHtml(key,index);menu.hidden=false;}
-function variantDetails(v){return [v.caliber,v.capacity?v.capacity+' capacity':'',v.barrel_length?v.barrel_length+' barrel':'',v.finish,v.manufacturer_part_number?'MPN '+v.manufacturer_part_number:'',v.upc?'UPC '+v.upc:''].filter(Boolean).join(' · ');}
+function variantDetails(v){return [v.caliber,v.capacity?v.capacity+' capacity':'',v.barrel_length?v.barrel_length+' barrel':'',v.finish].filter(Boolean).join(' · ')||'Configuration details to be confirmed';}
+function variantGroups(rows){
+ var groups=[],seen=Object.create(null);
+ (rows||[]).forEach(function(v,i){
+  var label=variantDetails(v),key=label.toLowerCase().replace(/\s+/g,' ').trim();
+  if(!seen[key]){seen[key]={label:label,items:[],firstIndex:i};groups.push(seen[key]);}
+  seen[key].items.push({variant:v,index:i});
+ });
+ return groups;
+}
 function variantEditor(index,pref){
  if(!pref.model)return '';
- var load=variantLoads[index],html='<div class="field cc-variants"><label>Specific catalog variant (optional)</label>';
- if(!load||load.manufacturer!==pref.manufacturer||load.model!==pref.model){return html+'<p class="muted">Loading configurations…</p></div>';}
+ var load=variantLoads[index],html='<div class="field cc-variants"><label>Preferred configuration (optional)</label>';
+ if(!load||load.manufacturer!==pref.manufacturer||load.model!==pref.model)return html+'<p class="muted">Loading configurations…</p></div>';
  if(load.loading)return html+'<p class="muted">Loading configurations…</p></div>';
- if(load.error)return html+'<p class="error">'+esc(load.error)+'</p><button type="button" class="btn" data-variant-retry="1" data-index="'+index+'">Retry variants</button></div>';
- if(!load.rows.length)return html+'<p class="muted">No catalog variants found. You can still describe your preferences in your consultation.</p></div>';
- html+='<p class="muted">Choose an exact SKU, or leave this open for your representative. Different UPCs may share the same displayed specifications.</p><div class="grid">';
- html+='<button type="button" class="choice'+(!pref.variant?' selected':'')+'" data-variant-pick="1" data-index="'+index+'" data-row="-1" aria-pressed="'+(!pref.variant)+'"><span class="choice-text"><strong>No specific variant</strong><small>Representative guidance / general model preference</small></span><span class="mark">'+(!pref.variant?'✓':'')+'</span></button>';
- load.rows.forEach(function(v,i){var selected=!!pref.variant&&pref.variant.source===v.source&&pref.variant.source_id===v.source_id;html+='<button type="button" class="choice'+(selected?' selected':'')+'" data-variant-pick="1" data-index="'+index+'" data-row="'+i+'" aria-pressed="'+selected+'"><span class="choice-text"><strong>'+esc(v.manufacturer_part_number||v.source_id)+'</strong><small>'+esc(variantDetails(v))+'</small></span><span class="mark">'+(selected?'✓':'')+'</span></button>';});
+ if(load.error)return html+'<p class="error">'+esc(load.error)+'</p><button type="button" class="btn" data-variant-retry="1" data-index="'+index+'">Retry configurations</button></div>';
+ if(!load.rows.length)return html+'<p class="muted">No catalog configurations found. You can still describe your preferences in your consultation.</p></div>';
+ html+='<p class="muted">Choose the specifications that matter to you, or leave the configuration open for your representative. Similar listings are grouped; your representative will verify exact availability and compatibility.</p><div class="grid">';
+ html+='<button type="button" class="choice'+(!pref.variant?' selected':'')+'" data-variant-pick="1" data-index="'+index+'" data-row="-1" aria-pressed="'+(!pref.variant)+'"><span class="choice-text"><strong>No specific configuration</strong><small>Let my representative recommend one</small></span><span class="mark">'+(!pref.variant?'✓':'')+'</span></button>';
+ variantGroups(load.rows).forEach(function(g){
+  var selected=!!pref.variant&&g.items.some(function(item){return item.variant.source===pref.variant.source&&item.variant.source_id===pref.variant.source_id;});
+  html+='<button type="button" class="choice'+(selected?' selected':'')+'" data-variant-pick="1" data-index="'+index+'" data-row="'+g.firstIndex+'" aria-pressed="'+selected+'"><span class="choice-text"><strong>'+esc(g.label)+'</strong>'+(g.items.length>1?'<small>Multiple catalog listings share these specifications</small>':'')+'</span><span class="mark">'+(selected?'✓':'')+'</span></button>';
+ });
  html+='</div>';
- if(load.hasMore)html+='<button type="button" class="btn" data-variant-more="1" data-index="'+index+'">Load more variants…</button>';
+ if(load.hasMore)html+='<button type="button" class="btn" data-variant-more="1" data-index="'+index+'">Load more configurations…</button>';
  return html+'</div>';
 }
 function loadVariants(index,append){

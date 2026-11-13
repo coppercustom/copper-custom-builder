@@ -30,8 +30,15 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
   const action = body.action;
   const category = body.category;
-  if (!["manufacturers", "products"].includes(String(action)) ||
+  if (!["manufacturers", "products", "conflicts"].includes(String(action)) ||
       !["optic", "suppressor"].includes(String(category))) return json({ error: "Unsupported request" }, 400);
+  if (action === "conflicts") {
+    const { data, error } = await db.from("cc_accessory_identifier_conflicts")
+      .select("id,product_category,manufacturer,model,upc,manufacturer_part_number,review_status,conflict_group_size")
+      .eq("product_category", category as string).order("manufacturer").order("manufacturer_part_number").order("id").limit(100);
+    if (error) return json({ error: "Conflict review unavailable" }, 503);
+    return json({ success: true, provisional: true, conflicts: data || [] });
+  }
   let query = db.from("cc_accessory_internal_provisional_catalog")
     .select("id,product_category,manufacturer,model,review_status,source_listing_count")
     .eq("product_category", category as string);

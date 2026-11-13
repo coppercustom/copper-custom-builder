@@ -30,8 +30,24 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
   const action = body.action;
   const category = body.category;
-  if (!["manufacturers", "products", "conflicts", "review-history", "submit-review", "review-summary"].includes(String(action)) ||
+  if (!["manufacturers", "products", "conflicts", "review-history", "submit-review", "review-summary", "supplier-links"].includes(String(action)) ||
       !["optic", "suppressor"].includes(String(category))) return json({ error: "Unsupported request" }, 400);
+  if (action === "supplier-links") {
+    const manufacturer = String(body.manufacturer || "").trim().slice(0,120);
+    const model = String(body.model || "").trim().slice(0,160);
+    if (!manufacturer || !model) return json({ error: "Manufacturer and model required" }, 400);
+    const { data: matches, error: matchError } = await db.from("cc_unified_firearms_v2")
+      .select("source,source_id,manufacturer,model,upc,manufacturer_part_number")
+      .ilike("manufacturer", manufacturer.replace(/[%_]/g, "")).ilike("model", model.replace(/[%_]/g, "")).limit(30);
+    if (matchError) return json({ error: "Supplier lookup unavailable" }, 503);
+    const rows = (matches || []).filter(x => ["lipseys","sports_south"].includes(x.source));
+    const { data: links, error: linkError } = rows.length ? await db.from("cc_supplier_listing_links")
+      .select("supplier,supplier_product_id,listing_url,verification_status")
+      .in("supplier_product_id", rows.map(x => x.source_id)) : { data: [], error: null };
+    if (linkError) return json({ error: "Supplier lookup unavailable" }, 503);
+    const verified = new Map((links || []).filter(x => x.verification_status === "verified").map(x => [x.supplier + ":" + x.supplier_product_id, x.listing_url]));
+    return json({ success: true, matches: rows.map(x => ({ ...x, listing_url: verified.get(x.source + ":" + x.source_id) || null })), truncated: (matches || []).length === 30 });
+  }
   if (action === "submit-review") {
     const productId = Number(body.product_id);
     const decision = String(body.decision || "");

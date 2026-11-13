@@ -33,20 +33,37 @@ Deno.serve(async (req) => {
   if (!["manufacturers", "products", "conflicts", "review-history", "submit-review", "review-summary", "supplier-links"].includes(String(action)) ||
       (action !== "supplier-links" && !["optic", "suppressor"].includes(String(category)))) return json({ error: "Unsupported request" }, 400);
   if (action === "supplier-links") {
-    const manufacturer = String(body.manufacturer || "").trim().slice(0,120);
-    const model = String(body.model || "").trim().slice(0,160);
+    const manufacturer = String(body.manufacturer || "").trim().slice(0, 120);
+    const model = String(body.model || "").trim().slice(0, 160);
+    const upc = String(body.upc || "").replace(/[^0-9]/g, "").slice(0, 14);
+    const mpn = String(body.manufacturer_part_number || "").trim().slice(0, 120);
+    const caliber = String(body.caliber || "").trim().slice(0, 80);
     if (!manufacturer || !model) return json({ error: "Manufacturer and model required" }, 400);
+    const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
     const { data: matches, error: matchError } = await db.from("cc_unified_firearms_v2")
       .select("source,source_id,manufacturer,model,upc,manufacturer_part_number,caliber,firearm_type,weapon_class")
-      .ilike("manufacturer", manufacturer.replace(/[%_]/g, "")).ilike("model", model.replace(/[%_]/g, "")).limit(30);
+      .ilike("manufacturer", manufacturer.replace(/[%_]/g, ""))
+      .ilike("model", model.replace(/[%_]/g, ""))
+      .order("source").order("source_id").limit(200);
     if (matchError) return json({ error: "Supplier lookup unavailable" }, 503);
     const rows = (matches || []).filter(x => ["lipseys","sports_south"].includes(x.source));
     const { data: links, error: linkError } = rows.length ? await db.from("cc_supplier_listing_links")
       .select("supplier,supplier_product_id,listing_url,verification_status")
       .in("supplier_product_id", rows.map(x => x.source_id)) : { data: [], error: null };
     if (linkError) return json({ error: "Supplier lookup unavailable" }, 503);
-    const verified = new Map((links || []).filter(x => x.verification_status === "verified").map(x => [x.supplier + ":" + x.supplier_product_id, x.listing_url]));
-    return json({ success: true, matches: rows.map(x => ({ ...x, listing_url: verified.get(x.source + ":" + x.source_id) || (x.source === "lipseys" && /^[A-Za-z0-9_-]{2,80}$/.test(x.source_id) ? "https://www.lipseys.com/itemdetail?itemno=" + encodeURIComponent(x.source_id) : null) })), truncated: (matches || []).length === 30 });
+    const verified = new Map((links || []).filter(x => x.verification_status === "verified")
+      .map(x => [x.supplier + ":" + x.supplier_product_id, x.listing_url]));
+    const ranked = rows.map(x => {
+      const upcMatch = !!upc && String(x.upc || "").replace(/[^0-9]/g, "") === upc;
+      const mpnMatch = !!mpn && clean(String(x.manufacturer_part_number || "")) === clean(mpn);
+      const caliberMatch = !!caliber && clean(String(x.caliber || "")) === clean(caliber);
+      const score = (upcMatch ? 100 : 0) + (mpnMatch ? 60 : 0) + (caliberMatch ? 20 : 0);
+      const listing_url = verified.get(x.source + ":" + x.source_id) ||
+        (x.source === "lipseys" && /^[A-Za-z0-9_-]{2,80}$/.test(x.source_id)
+          ? "https://www.lipseys.com/itemdetail?itemno=" + encodeURIComponent(x.source_id) : null);
+      return { ...x, listing_url, match_level: upcMatch ? "exact_upc" : mpnMatch ? "exact_part_number" : caliberMatch ? "caliber_match" : "model_family", match_score: score };
+    }).sort((a,b) => b.match_score-a.match_score || a.model.localeCompare(b.model) || a.source.localeCompare(b.source) || a.source_id.localeCompare(b.source_id));
+    return json({ success: true, matches: ranked.slice(0, 30), total_matches: ranked.length, truncated: (matches || []).length === 200 || ranked.length > 30, exact_identifier_match: ranked.some(x => x.match_score >= 60) });
   }
   if (action === "submit-review") {
     const productId = Number(body.product_id);

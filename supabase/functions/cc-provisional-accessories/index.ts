@@ -30,8 +30,30 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
   const action = body.action;
   const category = body.category;
-  if (!["manufacturers", "products", "conflicts"].includes(String(action)) ||
+  if (!["manufacturers", "products", "conflicts", "review-history", "submit-review"].includes(String(action)) ||
       !["optic", "suppressor"].includes(String(category))) return json({ error: "Unsupported request" }, 400);
+  if (action === "submit-review") {
+    const productId = Number(body.product_id);
+    const decision = String(body.decision || "");
+    const notes = String(body.notes || "").trim();
+    if (!Number.isSafeInteger(productId) || productId <= 0 || !["distinct_variant","suspected_data_error","needs_supplier_verification"].includes(decision) || notes.length > 2000 || (decision !== "distinct_variant" && notes.length < 5)) return json({ error: "Invalid review" }, 400);
+    const { data: product, error: productError } = await db.from("cc_accessory_identifier_conflicts").select("id").eq("id", productId).eq("product_category", category as string).maybeSingle();
+    if (productError) return json({ error: "Review unavailable" }, 503);
+    if (!product) return json({ error: "Product is not in conflict review" }, 404);
+    const { data, error } = await db.from("cc_accessory_identifier_review_events").insert({ product_id: productId, reviewer_user_id: userData.user.id, decision, notes }).select("id,product_id,decision,notes,created_at").single();
+    if (error) return json({ error: "Could not save review" }, 503);
+    return json({ success: true, review: data });
+  }
+  if (action === "review-history") {
+    const productId = Number(body.product_id);
+    if (!Number.isSafeInteger(productId) || productId <= 0) return json({ error: "Invalid product" }, 400);
+    const { data: product, error: productError } = await db.from("cc_accessory_identifier_conflicts").select("id").eq("id", productId).eq("product_category", category as string).maybeSingle();
+    if (productError) return json({ error: "Review unavailable" }, 503);
+    if (!product) return json({ error: "Product is not in conflict review" }, 404);
+    const { data, error } = await db.from("cc_accessory_identifier_review_events").select("id,product_id,reviewer_user_id,decision,notes,created_at").eq("product_id", productId).order("created_at", { ascending: false }).limit(50);
+    if (error) return json({ error: "Review history unavailable" }, 503);
+    return json({ success: true, reviews: data || [] });
+  }
   if (action === "conflicts") {
     const { data, error } = await db.from("cc_accessory_identifier_conflicts")
       .select("id,product_category,manufacturer,model,upc,manufacturer_part_number,review_status,conflict_group_size")

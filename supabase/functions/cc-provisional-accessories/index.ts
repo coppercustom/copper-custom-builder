@@ -37,7 +37,7 @@ Deno.serve(async (req) => {
     const model = String(body.model || "").trim().slice(0,160);
     if (!manufacturer || !model) return json({ error: "Manufacturer and model required" }, 400);
     const { data: matches, error: matchError } = await db.from("cc_unified_firearms_v2")
-      .select("source,source_id,manufacturer,model,upc,manufacturer_part_number")
+      .select("source,source_id,manufacturer,model,upc,manufacturer_part_number,caliber,firearm_type,weapon_class")
       .ilike("manufacturer", manufacturer.replace(/[%_]/g, "")).ilike("model", model.replace(/[%_]/g, "")).limit(30);
     if (matchError) return json({ error: "Supplier lookup unavailable" }, 503);
     const rows = (matches || []).filter(x => ["lipseys","sports_south"].includes(x.source));

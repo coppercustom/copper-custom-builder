@@ -39,14 +39,10 @@ function primaryCatalogFilters(){
  if(state.category==='Pistol'){
   firearmType=state.pistolType==='Semi-Auto'?'Semi-Auto Pistol':state.pistolType==='Revolver'?'Revolver':(state.pistolType==='Single Shot'||state.pistolType==='Other')?'Specialty Handgun':null;
   firearmAction=null;
-  if(state.pistolType==='Semi-Auto'){
-   if(state.pistolMechanism==='Striker-Fired')firearmAction='Striker Fired';
-   else if(state.pistolMechanism==='Hammer-Fired'){
-    if(state.pistolTriggerAction==='Single Action')firearmAction='Single Action';
-    else if(state.pistolTriggerAction==='Double Action')firearmAction='Double Action Only';
-    else if(state.pistolTriggerAction==='DA/SA')firearmAction='Double / Single Action';
-   }
-  }else if(state.pistolType==='Single Shot')firearmAction='Single Shot';
+  // Mechanism and trigger preferences are consultation notes, not catalog filters.
+  // Supplier action labels are incomplete and filtering by striker/hammer can hide valid models.
+  // Preserve the user's answers in state for the employee summary.
+  if(state.pistolType==='Single Shot')firearmAction='Single Shot';
  }else if(state.category==='Shotgun'){
   // Shotgun preference labels do not yet have verified catalog action mappings.
   firearmType=null;firearmAction=null;

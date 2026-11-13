@@ -31,7 +31,7 @@ Deno.serve(async (req) => {
   const action = body.action;
   const category = body.category;
   if (!["manufacturers", "products", "conflicts", "review-history", "submit-review", "review-summary", "supplier-links"].includes(String(action)) ||
-      !["optic", "suppressor"].includes(String(category))) return json({ error: "Unsupported request" }, 400);
+      (action !== "supplier-links" && !["optic", "suppressor"].includes(String(category)))) return json({ error: "Unsupported request" }, 400);
   if (action === "supplier-links") {
     const manufacturer = String(body.manufacturer || "").trim().slice(0,120);
     const model = String(body.model || "").trim().slice(0,160);
@@ -46,7 +46,7 @@ Deno.serve(async (req) => {
       .in("supplier_product_id", rows.map(x => x.source_id)) : { data: [], error: null };
     if (linkError) return json({ error: "Supplier lookup unavailable" }, 503);
     const verified = new Map((links || []).filter(x => x.verification_status === "verified").map(x => [x.supplier + ":" + x.supplier_product_id, x.listing_url]));
-    return json({ success: true, matches: rows.map(x => ({ ...x, listing_url: verified.get(x.source + ":" + x.source_id) || null })), truncated: (matches || []).length === 30 });
+    return json({ success: true, matches: rows.map(x => ({ ...x, listing_url: verified.get(x.source + ":" + x.source_id) || (x.source === "lipseys" && /^[A-Za-z0-9_-]{2,80}$/.test(x.source_id) ? "https://www.lipseys.com/itemdetail?itemno=" + encodeURIComponent(x.source_id) : null) })), truncated: (matches || []).length === 30 });
   }
   if (action === "submit-review") {
     const productId = Number(body.product_id);

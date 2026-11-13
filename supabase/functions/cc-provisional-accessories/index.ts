@@ -30,7 +30,7 @@ Deno.serve(async (req) => {
   try { body = await req.json(); } catch { return json({ error: "Invalid JSON" }, 400); }
   const action = body.action;
   const category = body.category;
-  if (!["manufacturers", "products", "conflicts", "review-history", "submit-review"].includes(String(action)) ||
+  if (!["manufacturers", "products", "conflicts", "review-history", "submit-review", "review-summary"].includes(String(action)) ||
       !["optic", "suppressor"].includes(String(category))) return json({ error: "Unsupported request" }, 400);
   if (action === "submit-review") {
     const productId = Number(body.product_id);
@@ -52,14 +52,32 @@ Deno.serve(async (req) => {
     if (!product) return json({ error: "Product is not in conflict review" }, 404);
     const { data, error } = await db.from("cc_accessory_identifier_review_events").select("id,product_id,reviewer_user_id,decision,notes,created_at").eq("product_id", productId).order("created_at", { ascending: false }).limit(50);
     if (error) return json({ error: "Review history unavailable" }, 503);
-    return json({ success: true, reviews: data || [] });
+    const { data: names, error: namesError } = await db.from("cc_staff").select("user_id,display_name").in("user_id", [...new Set((data || []).map(x => x.reviewer_user_id))]);
+    if (namesError) return json({ error: "Review history unavailable" }, 503);
+    const nameMap = new Map((names || []).map(x => [x.user_id, x.display_name || "Employee"]));
+    return json({ success: true, reviews: (data || []).map(x => ({ ...x, reviewer_display_name: nameMap.get(x.reviewer_user_id) || "Former employee" })) });
+  }
+  if (action === "review-summary") {
+    const { data: conflicts, error: conflictsError } = await db.from("cc_accessory_identifier_conflicts").select("id").eq("product_category", category as string).limit(1000);
+    if (conflictsError) return json({ error: "Review summary unavailable" }, 503);
+    const ids = (conflicts || []).map(x => x.id);
+    if (!ids.length) return json({ success: true, summary: { total: 0, unreviewed: 0, distinct_variant: 0, suspected_data_error: 0, needs_supplier_verification: 0 } });
+    const { data: latest, error } = await db.from("cc_accessory_identifier_review_latest").select("product_id,decision").in("product_id", ids);
+    if (error) return json({ error: "Review summary unavailable" }, 503);
+    const summary = { total: ids.length, unreviewed: ids.length - (latest || []).length, distinct_variant: 0, suspected_data_error: 0, needs_supplier_verification: 0 };
+    for (const x of (latest || [])) if (x.decision in summary) (summary as Record<string,number>)[x.decision]++;
+    return json({ success: true, summary });
   }
   if (action === "conflicts") {
     const { data, error } = await db.from("cc_accessory_identifier_conflicts")
       .select("id,product_category,manufacturer,model,upc,manufacturer_part_number,review_status,conflict_group_size")
       .eq("product_category", category as string).order("manufacturer").order("manufacturer_part_number").order("id").limit(100);
     if (error) return json({ error: "Conflict review unavailable" }, 503);
-    return json({ success: true, provisional: true, conflicts: data || [] });
+    const ids = (data || []).map(x => x.id);
+    const { data: latest, error: latestError } = ids.length ? await db.from("cc_accessory_identifier_review_latest").select("product_id,decision,notes,created_at,reviewer_display_name").in("product_id", ids) : { data: [], error: null };
+    if (latestError) return json({ error: "Conflict review unavailable" }, 503);
+    const byId = new Map((latest || []).map(x => [x.product_id, x]));
+    return json({ success: true, provisional: true, conflicts: (data || []).map(x => ({ ...x, latest_staff_review: byId.get(x.id) || null })) });
   }
   let query = db.from("cc_accessory_internal_provisional_catalog")
     .select("id,product_category,manufacturer,model,upc,manufacturer_part_number,specifications,review_status,source_listing_count")

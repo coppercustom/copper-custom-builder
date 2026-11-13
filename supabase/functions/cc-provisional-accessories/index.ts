@@ -40,7 +40,7 @@ Deno.serve(async (req) => {
     return json({ success: true, provisional: true, conflicts: data || [] });
   }
   let query = db.from("cc_accessory_internal_provisional_catalog")
-    .select("id,product_category,manufacturer,model,review_status,source_listing_count")
+    .select("id,product_category,manufacturer,model,upc,manufacturer_part_number,specifications,review_status,source_listing_count")
     .eq("product_category", category as string);
   if (action === "manufacturers") {
     // Fetch bounded catalog records for aggregation; pagination is required for larger sets.

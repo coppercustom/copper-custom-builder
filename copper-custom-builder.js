@@ -195,7 +195,7 @@ function mountTurnstile(){
  if(step!==7||submittedId||!content.querySelector('#cc-turnstile'))return;
  if(TURNSTILE_SITE_KEY.indexOf('PASTE_')===0){error='Setup needed: configure the Cloudflare Turnstile site key before enabling submissions.';return;}
  var holder=content.querySelector('#cc-turnstile');
- if(!window.turnstile){holder.textContent='Loading verification…';setTimeout(function(){if(step===7&&!submittedId&&window.turnstile&&holder.isConnected)mountTurnstile();},700);return;}
+ if(!window.turnstile){holder.textContent='Loading verification…';setTimeout(function(){if(step===8&&!submittedId&&window.turnstile&&holder.isConnected)mountTurnstile();},700);return;}
  try{turnstileWidget=window.turnstile.render(holder,{sitekey:TURNSTILE_SITE_KEY,theme:'dark',callback:function(token){turnstileToken=token;},'expired-callback':function(){turnstileToken='';},'error-callback':function(){turnstileToken='';}});}catch(e){holder.textContent='Verification could not load. Refresh and try again.';}
 }
 function validContact(){

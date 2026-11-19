@@ -1,0 +1,72 @@
+name: Sports South authenticated API smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  authenticate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SS_CUSTOMER: ${{ secrets.SPORTS_SOUTH_CUSTOMER_NUMBER }}
+      SS_USERNAME: ${{ secrets.SPORTS_SOUTH_USERNAME }}
+      SS_PASSWORD: ${{ secrets.SPORTS_SOUTH_PASSWORD }}
+    steps:
+      - name: Check required secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SS_CUSTOMER SS_USERNAME SS_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Required GitHub Actions secret missing for $name"
+              exit 1
+            fi
+          done
+          echo "Required credentials are configured."
+      - name: Make read-only DailyItemUpdate request
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Query from today to minimize response size. Do not advance any database checkpoint.
+          TODAY="$(date -u +'%m/%d/%Y')"
+          STATUS="$(curl --silent --show-error --max-time 45 \
+            --tlsv1.2 --tls-max 1.2 --ciphers 'ECDHE-RSA-AES128-SHA256' \
+            --request POST \
+            --data-urlencode "CustomerNumber=$SS_CUSTOMER" \
+            --data-urlencode "UserName=$SS_USERNAME" \
+            --data-urlencode "Password=$SS_PASSWORD" \
+            --data-urlencode "LastUpdate=$TODAY" \
+            --data-urlencode 'LastItem=' \
+            --data-urlencode 'Source=' \
+            --output /tmp/sports-south-response.xml \
+            --write-out '%{http_code}' \
+            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx/DailyItemUpdate')"
+          echo "HTTP status: $STATUS"
+          export SS_HTTP_STATUS="$STATUS"
+          python3 - <<'PY'
+          import os, xml.etree.ElementTree as ET
+          path='/tmp/sports-south-response.xml'
+          size=os.path.getsize(path)
+          print('Response bytes:',size)
+          if size>20_000_000:
+              raise SystemExit('Response exceeds smoke-test safety limit')
+          try:
+              root=ET.parse(path).getroot()
+          except ET.ParseError:
+              raise SystemExit('Response was not valid XML (contents withheld)')
+          print('XML root element:',root.tag.split('}')[-1])
+          print('Top-level child elements:', ', '.join(child.tag.split('}')[-1] for child in list(root)[:10]))
+          fault=next((e for e in root.iter() if e.tag.split('}')[-1].lower() in ('fault','faultstring')),None)
+          if fault is not None:
+              raise SystemExit('SOAP fault received; contents withheld to avoid sensitive data exposure')
+          if os.environ['SS_HTTP_STATUS']!='200':
+              raise SystemExit('Non-200 HTTP status; response withheld')
+          print('Authenticated request returned HTTP 200 and parseable XML; inspect response schema before importing.')
+          PY
+      - name: Delete temporary supplier response
+        if: always()
+        shell: bash
+        run: rm -f /tmp/sports-south-response.xml

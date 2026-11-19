@@ -598,60 +598,74 @@ $('cc-cat-add').addEventListener('click',async e=>{
   }catch(err){catalogStatus('Unable to update entry: '+err.message,true);btn.disabled=false;}
  });
 
- // Imported catalog visibility manager (supplier records are never deleted).
+
+ // Unified removal workflow for employee-added and supplier-backed catalog models.
  (function(){
-  const target=$('cc-cat-manage-results').parentElement;
+  const oldPanel=$('cc-cat-manage-results').parentElement;
+  oldPanel.style.display='none'; // Keep existing event targets intact; replace the two UIs with one.
   const panel=document.createElement('div');
   panel.className='card';panel.style.marginTop='20px';
-  panel.innerHTML='<h3>Manage imported catalog items</h3><p class="muted">Search the live firearm or light catalog. Removing a model hides it from customer search, including after supplier updates. Restore it at any time.</p><div class="row"><select id="cc-import-category"><option value="Firearm">Firearms</option><option value="Light">Lights</option></select><input class="grow" id="cc-import-search" type="search" placeholder="Search manufacturer or model (2+ characters)"><select id="cc-import-visibility"><option value="active">Active</option><option value="removed">Removed</option><option value="all">All</option></select><button type="button" class="secondary" id="cc-import-refresh">Search</button></div><p class="muted" id="cc-import-status" role="status">Enter a search to find imported products.</p><div id="cc-import-results"></div>';
-  target.insertAdjacentElement('afterend',panel);
+  panel.innerHTML='<h3>Remove listing</h3><p class="muted">Search employee-added and supplier-backed listings together. Removal hides the selected listing without deleting supplier data. You can restore removed listings.</p><div class="row"><select id="cc-remove-category" aria-label="Catalog category"><option value="Firearm">Firearms</option><option value="Light">Lights</option><option value="Optic">Optics (custom)</option><option value="Suppressor">Suppressors (custom)</option></select><input class="grow" id="cc-remove-search" type="search" placeholder="Search manufacturer or model"><select id="cc-remove-filter" aria-label="Visibility"><option value="active">Active</option><option value="removed">Removed</option><option value="all">All</option></select><button type="button" class="secondary" id="cc-remove-refresh">Search</button></div><p id="cc-remove-status" class="muted" role="status">Search for a model or manufacturer to manage listings.</p><div id="cc-remove-results"></div>';
+  oldPanel.insertAdjacentElement('afterend',panel);
   const el=id=>panel.querySelector('#'+id);
-  let found=[],exclusions=[],sequence=0,timer=null;
+  let results=[],exclusions=[],sequence=0,timer=null;
   const key=v=>String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-  function matchingExclusion(item){
-   return exclusions.find(x=>x.category===item.category&&key(x.manufacturer)===key(item.manufacturer)&&key(x.model)===key(item.model)&&(!x.weapon_class||x.weapon_class===item.weapon_class)&&!x.restored_at);
+  const isRemoved=x=>x.origin==='custom'?!!x.removed_at:!!exclusions.find(e=>e.category===x.category&&key(e.manufacturer)===key(x.manufacturer)&&key(e.model)===key(x.model)&&(!e.weapon_class||e.weapon_class===x.weapon_class)&&!e.restored_at);
+  function exclusionFor(x){return exclusions.find(e=>e.category===x.category&&key(e.manufacturer)===key(x.manufacturer)&&key(e.model)===key(x.model)&&(!e.weapon_class||e.weapon_class===x.weapon_class)&&!e.restored_at);}
+  function renderRemoval(){
+   const mode=el('cc-remove-filter').value;
+   const visible=results.map((x,i)=>({x,i})).filter(({x})=>mode==='all'||(mode==='removed'?isRemoved(x):!isRemoved(x)));
+   el('cc-remove-status').textContent=visible.length+' matching '+mode+' listings'+(results.length>=50?' (showing first results; refine your search)':'');
+   el('cc-remove-results').innerHTML=visible.length?visible.map(({x,i})=>{
+    const removed=isRemoved(x);
+    return '<div class="card row" style="margin:8px 0"><div class="grow"><strong>'+escape(x.manufacturer)+' — '+escape(x.model)+'</strong><div class="muted">'+escape(x.category)+(x.weapon_class?' · '+escape(x.weapon_class):'')+' · '+(x.origin==='custom'?'Employee added':'Supplier catalog')+' · '+(removed?'Removed':'Active')+'</div></div><button type="button" data-remove-index="'+i+'" class="'+(removed?'secondary':'')+'">'+(removed?'Restore':'Remove')+'</button></div>';
+   }).join(''):'<p class="muted">No matching listings. Try another search or filter.</p>';
   }
-  function renderImported(){
-   const mode=el('cc-import-visibility').value;
-   const rows=found.filter(x=>mode==='all'||(mode==='removed'?!!matchingExclusion(x):!matchingExclusion(x)));
-   el('cc-import-status').textContent=rows.length+' matching '+mode+' catalog models'+(found.length>=50?' (first 50 results; narrow your search)':'');
-   el('cc-import-results').innerHTML=rows.length?rows.map((x,i)=>{
-    const ex=matchingExclusion(x),idx=found.indexOf(x);
-    return '<div class="card row" style="margin:8px 0"><div class="grow"><strong>'+escape(x.manufacturer)+' — '+escape(x.model)+'</strong><div class="muted">'+escape(x.category)+(x.weapon_class?' · '+escape(x.weapon_class):'')+(ex?' · Removed':' · Active')+'</div></div><button type="button" data-import-index="'+idx+'" class="'+(ex?'secondary':'')+'">'+(ex?'Restore':'Remove')+'</button></div>';
-   }).join(''):'<p class="muted">No matching models. Try another search or visibility filter.</p>';
-  }
-  async function searchImported(){
-   const seq=++sequence,term=el('cc-import-search').value.trim(),category=el('cc-import-category').value;
-   if(term.length<2){found=[];el('cc-import-results').innerHTML='';el('cc-import-status').textContent='Enter at least two characters.';return;}
-   el('cc-import-status').textContent='Searching catalog…';
+  async function searchRemoval(){
+   const seq=++sequence,category=el('cc-remove-category').value,term=el('cc-remove-search').value.trim();
+   if(term.length<2){results=[];el('cc-remove-results').innerHTML='';el('cc-remove-status').textContent='Enter at least two characters to search.';return;}
+   el('cc-remove-status').textContent='Searching catalog…';
    try{
-    const [items,removed]=await Promise.all([
-     authorizedRequest('/rest/v1/rpc/cc_employee_catalog_search',{method:'POST',body:{p_category:category,p_search:term,p_limit:50}}),
-     authorizedRequest(table('cc_catalog_exclusions','select=id,category,manufacturer,model,weapon_class,restored_at&category=eq.'+encodeURIComponent(category)+'&restored_at=is.null&limit=1000'))
-    ]);
+    const requests=[
+     authorizedRequest(table('cc_catalog_additions','select=id,category,weapon_class,manufacturer,model,removed_at&category=eq.'+encodeURIComponent(category)+'&limit=1000')),
+    ];
+    if(category==='Firearm'||category==='Light'){
+     requests.push(authorizedRequest('/rest/v1/rpc/cc_employee_catalog_search',{method:'POST',body:{p_category:category,p_search:term,p_limit:50}}));
+     requests.push(authorizedRequest(table('cc_catalog_exclusions','select=id,category,manufacturer,model,weapon_class,restored_at&category=eq.'+encodeURIComponent(category)+'&restored_at=is.null&limit=1000')));
+    }
+    const data=await Promise.all(requests);
     if(seq!==sequence)return;
-    found=Array.isArray(items)?items:[];exclusions=Array.isArray(removed)?removed:[];renderImported();
-   }catch(err){if(seq===sequence)el('cc-import-status').textContent='Catalog search failed: '+err.message;}
+    const custom=(Array.isArray(data[0])?data[0]:[]).filter(x=>[x.manufacturer,x.model].some(v=>String(v||'').toLowerCase().includes(term.toLowerCase()))).map(x=>({...x,origin:'custom'}));
+    const supplier=(Array.isArray(data[1])?data[1]:[]).map(x=>({...x,origin:'supplier'}));
+    exclusions=Array.isArray(data[2])?data[2]:[];
+    results=[...custom,...supplier].sort((a,b)=>a.manufacturer.localeCompare(b.manufacturer)||a.model.localeCompare(b.model)||a.origin.localeCompare(b.origin));
+    renderRemoval();
+   }catch(err){if(seq===sequence)el('cc-remove-status').textContent='Unable to search: '+err.message;}
   }
-  el('cc-import-search').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(searchImported,350);});
-  el('cc-import-refresh').addEventListener('click',searchImported);
-  el('cc-import-category').addEventListener('change',searchImported);
-  el('cc-import-visibility').addEventListener('change',renderImported);
-  el('cc-import-results').addEventListener('click',async e=>{
-   const btn=e.target.closest('[data-import-index]');if(!btn)return;
-   const item=found[Number(btn.dataset.importIndex)];if(!item)return;
-   const existing=matchingExclusion(item),restore=!!existing;
-   if(!window.confirm((restore?'Restore':'Remove')+' '+item.manufacturer+' — '+item.model+' from the customer catalog?'))return;
+  el('cc-remove-search').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(searchRemoval,350);});
+  el('cc-remove-refresh').addEventListener('click',searchRemoval);
+  el('cc-remove-category').addEventListener('change',searchRemoval);
+  el('cc-remove-filter').addEventListener('change',renderRemoval);
+  el('cc-remove-results').addEventListener('click',async e=>{
+   const btn=e.target.closest('[data-remove-index]');if(!btn)return;
+   const x=results[Number(btn.dataset.removeIndex)];if(!x)return;
+   const restoring=isRemoved(x);
+   if(!window.confirm((restoring?'Restore':'Remove')+' '+x.manufacturer+' — '+x.model+' ('+(x.origin==='custom'?'employee-added':'supplier')+')?'))return;
    btn.disabled=true;
    try{
-    if(restore){
-     const result=await authorizedRequest(table('cc_catalog_exclusions','id=eq.'+existing.id+'&select=id'),{method:'PATCH',body:{restored_at:new Date().toISOString(),restored_by:currentUser.id},headers:{Prefer:'return=representation'}});
-     if(!Array.isArray(result)||result.length!==1)throw Error('Restore did not update a record.');
+    if(x.origin==='custom'){
+     const changed=await authorizedRequest(table('cc_catalog_additions','id=eq.'+encodeURIComponent(x.id)+'&select=id'),{method:'PATCH',body:{removed_at:restoring?null:new Date().toISOString(),removed_by:restoring?null:currentUser.id},headers:{Prefer:'return=representation'}});
+     if(!Array.isArray(changed)||changed.length!==1)throw Error('No custom entry was updated.');
+     await loadCatalogEntries();catalogMakerCache.clear();
+    }else if(restoring){
+     const ex=exclusionFor(x);
+     const changed=await authorizedRequest(table('cc_catalog_exclusions','id=eq.'+ex.id+'&select=id'),{method:'PATCH',body:{restored_at:new Date().toISOString(),restored_by:currentUser.id},headers:{Prefer:'return=representation'}});
+     if(!Array.isArray(changed)||changed.length!==1)throw Error('No exclusion was restored.');
     }else{
-     await authorizedRequest(table('cc_catalog_exclusions'),{method:'POST',body:{category:item.category,manufacturer:item.manufacturer,model:item.model,weapon_class:item.weapon_class||null,created_by:currentUser.id},headers:{Prefer:'return=minimal'}});
+     await authorizedRequest(table('cc_catalog_exclusions'),{method:'POST',body:{category:x.category,manufacturer:x.manufacturer,model:x.model,weapon_class:x.weapon_class||null,created_by:currentUser.id},headers:{Prefer:'return=minimal'}});
     }
-    await searchImported();catalogStatus(restore?'Model restored to customer catalog.':'Model hidden from customer catalog.');
-   }catch(err){catalogStatus('Unable to update catalog: '+err.message,true);btn.disabled=false;}
+    await searchRemoval();catalogStatus(restoring?'Listing restored.':'Listing removed from customer catalog.');
+   }catch(err){catalogStatus('Unable to update listing: '+err.message,true);btn.disabled=false;}
   });
  })();
 

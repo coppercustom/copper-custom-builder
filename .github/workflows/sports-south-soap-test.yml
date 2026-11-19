@@ -405,6 +405,60 @@ jobs:
                 old,old_name[:100],new,new_name[:100],count))
             print('Review manufacturer naming and possible reclassification before approving updates.')
             print('Brand assignments remain unchanged; discrepancies require review.')
+          # Consolidated import-readiness simulation. No database mutations.
+          safe_map={'description':'IDESC','short_description':'SHDESC',
+                    'manufacturer_item_no':'MFGINO','model':'IMODEL',
+                    'upc':'ITUPC','category_id':'CATID','image_ref':'PICREF'}
+          required=('ITEMNO','IDESC','MFGINO','CATID')
+          incoming_new={item:fields for item,fields in incoming.items() if item not in existing}
+          invalid_new=[item for item,fields in incoming_new.items()
+                       if any(not fields.get(field,'').strip() for field in required)]
+          # Duplicate UPCs can indicate cross-listings, not necessarily identical products.
+          # Query current Sports South UPCs without exposing individual supplier values.
+          new_upcs=sorted(set(fields.get('ITUPC','').strip() for fields in incoming_new.values())-{''})
+          existing_upc_matches=set()
+          for start in range(0,len(new_upcs),50):
+            batch=new_upcs[start:start+50]
+            query=urllib.parse.urlencode({'select':'item_no,upc',
+              'upc':'in.('+','.join('"'+v.replace('"','')+'"' for v in batch)+')'})
+            request=urllib.request.Request(endpoint+'?'+query,headers={
+              'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
+            with urllib.request.urlopen(request,timeout=25) as response:
+              for record in json.load(response):
+                if str(record.get('item_no')) not in incoming_new:
+                  existing_upc_matches.add(str(record.get('upc') or '').strip())
+          incoming_upc_counts=Counter(fields.get('ITUPC','').strip()
+                                      for fields in incoming_new.values() if fields.get('ITUPC','').strip())
+          repeated_new_upcs={upc for upc,count in incoming_upc_counts.items() if count>1}
+          candidate_inserts=sum(1 for item,fields in incoming_new.items()
+                                if item not in invalid_new and fields.get('ITUPC','').strip() not in existing_upc_matches
+                                and fields.get('ITUPC','').strip() not in repeated_new_upcs)
+          candidate_updates=0
+          no_change=0
+          for item,fields in incoming.items():
+            if item not in existing: continue
+            row=existing[item]
+            if any(str(row.get(column) or '').strip()!=fields.get(source,'').strip()
+                   for column,source in safe_map.items()):
+              candidate_updates+=1
+            else:
+              no_change+=1
+          print('=== CONSOLIDATED READ-ONLY IMPORT READINESS ===')
+          print('SOAP transport: passed; parsed supplier rows:',len(incoming))
+          print('Existing supplier ITEMNO:',len(existing),'new ITEMNO:',len(incoming_new))
+          print('New rows missing required fields:',len(invalid_new))
+          print('New rows with UPC already in Sports South staging:',sum(
+            fields.get('ITUPC','').strip() in existing_upc_matches for fields in incoming_new.values()))
+          print('New rows sharing UPC with another new row:',sum(
+            fields.get('ITUPC','').strip() in repeated_new_upcs for fields in incoming_new.values()))
+          print('New rows with blank UPC:',sum(not fields.get('ITUPC','').strip() for fields in incoming_new.values()))
+          print('Eligible new supplier rows for later review:',candidate_inserts)
+          print('Existing rows with verified non-brand field differences:',candidate_updates)
+          print('Existing rows unchanged on verified non-brand fields:',no_change)
+          print('Brand reassignment conflicts held for review:',len(mismatches))
+          print('Unified cross-supplier deduplication: NOT validated by this staging-only test.')
+          print('Attributes mapping: NOT validated; not included in proposed writes.')
+          print('Decision: DRY RUN ONLY. No inserts, updates, checkpoint changes or supplier pricing.')
           print('No raw supplier values, customer identifiers, or credentials printed.')
           print('Database writes: 0; sync checkpoints changed: 0')
           PY

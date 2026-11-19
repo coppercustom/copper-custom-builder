@@ -51,7 +51,7 @@ jobs:
           status="$(curl --silent --show-error --max-time 50 --tlsv1.2 --tls-max 1.2 \
             --ciphers 'ECDHE-RSA-AES128-SHA256' \
             --header 'Content-Type: text/xml; charset=utf-8' \
-            --header 'SOAPAction: "http://webservices.theshootingwarehouse.com/smart/inventory.asmx/DailyItemUpdate"' \
+            --header 'SOAPAction: "https://webservices.theshootingwarehouse.com/smart/inventory.asmx/DailyItemUpdate"' \
             --data-binary @/tmp/ss-request.xml \
             --output /tmp/ss-response.xml --write-out '%{http_code}' \
             'https://webservices.theshootingwarehouse.com/smart/inventory.asmx')"

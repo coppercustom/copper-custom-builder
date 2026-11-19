@@ -418,7 +418,7 @@ async function loadCatalogManufacturers(force=false){
  if(!force&&catalogMakerCache.has(cacheKey)){catalogMakerNames=catalogMakerCache.get(cacheKey);renderCatalogMakers();return;}
  $('cc-cat-maker-hint').textContent='Loading manufacturers…';$('cc-cat-maker-select').disabled=true;
  try{
-  const payload=category==='Firearm'?{action:'firearm-manufacturers',weaponClass}: {action:'manufacturers',itemType:category==='Optic'?'Optic':'NFA'};
+  const payload=category==='Firearm'?{action:'unified-firearm-manufacturers',weaponClass}:category==='Light'?{action:'light-manufacturers'}:{action:'manufacturers',itemType:category==='Optic'?'Optic':'NFA'};
   const [publicResponse,customRows]=await Promise.all([
    fetch(CATALOG_API,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(async r=>{const j=await r.json();if(!r.ok||!j.success)throw Error(j.error||'Manufacturer catalog unavailable');return j;}),
    authorizedRequest(table('cc_catalog_additions','select=manufacturer,weapon_class&removed_at=is.null&category=eq.'+encodeURIComponent(category)+'&limit=1000'))
@@ -546,6 +546,7 @@ $('cc-save-builder-settings').addEventListener('click',async e=>{
  catch(err){status.textContent='Not saved: '+err.message;}
  finally{btn.disabled=false;}
 });
+if(!$('cc-cat-category').querySelector('option[value="Light"]')){$('cc-cat-category').add(new Option('Lights','Light'));}
 $('cc-cat-category').addEventListener('change',()=>{catalogMakerRequest++;$('cc-cat-maker-search').value='';catalogFields();});
 $('cc-cat-class').addEventListener('change',()=>{catalogMakerRequest++;$('cc-cat-maker-search').value='';catalogFields();});
 $('cc-cat-kind').addEventListener('change',catalogFields);

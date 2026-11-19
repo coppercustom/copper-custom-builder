@@ -1,0 +1,132 @@
+name: Isolated PostgreSQL transaction safety
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: isolated_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U testuser -d isolated_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGDATABASE: isolated_test
+      PGUSER: testuser
+      PGPASSWORD: testpass
+    steps:
+      - name: Install isolated test dependency
+        run: python3 -m pip install --disable-pip-version-check --quiet psycopg[binary]==3.2.12
+      - name: Run comprehensive isolated PostgreSQL checks
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,json,hashlib,threading,time
+          import psycopg
+          from psycopg.errors import LockNotAvailable,UniqueViolation
+          def conn():
+            return psycopg.connect(host=os.environ['PGHOST'],port=os.environ['PGPORT'],
+              dbname=os.environ['PGDATABASE'],user=os.environ['PGUSER'],
+              password=os.environ['PGPASSWORD'])
+          def digest(rows):
+            return hashlib.sha256(json.dumps(rows,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          def apply(window,rows,fail=False):
+            with conn() as c:
+              with c.transaction():
+                with c.cursor() as cur:
+                  cur.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(window,))
+                  cur.execute('SELECT digest FROM test_checkpoints WHERE window=%s',(window,))
+                  found=cur.fetchone()
+                  d=digest(rows)
+                  if found:
+                    if found[0]!=d:raise ValueError('conflicting replay')
+                    return 'replay'
+                  for k,v in rows:
+                    cur.execute('INSERT INTO test_items(k,v) VALUES(%s,%s) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v',(k,v))
+                    if fail:raise RuntimeError('injected failure')
+                  cur.execute('INSERT INTO test_checkpoints(window,digest) VALUES(%s,%s)',(window,d))
+                  return 'committed'
+          results={}
+          with conn() as c:
+            with c.cursor() as cur:
+              cur.execute('CREATE TABLE test_items(k text PRIMARY KEY,v text NOT NULL)')
+              cur.execute('CREATE TABLE test_checkpoints(window text PRIMARY KEY,digest text NOT NULL)')
+          try:apply('w1',[('a','1')],fail=True)
+          except RuntimeError:pass
+          with conn() as c:
+            with c.cursor() as cur:
+              cur.execute('SELECT count(*) FROM test_items')
+              items=cur.fetchone()[0]
+              cur.execute('SELECT count(*) FROM test_checkpoints')
+              checkpoints=cur.fetchone()[0]
+          results['atomic_rollback']=items==0 and checkpoints==0
+          results['successful_commit']=apply('w1',[('a','1')])=='committed'
+          with conn() as c:
+            with c.cursor() as cur:
+              cur.execute('SELECT digest FROM test_checkpoints WHERE window=%s',('w1',))
+              results['durable_checkpoint']=cur.fetchone()[0]==digest([('a','1')])
+          results['idempotent_replay']=apply('w1',[('a','1')])=='replay'
+          try:apply('w1',[('a','changed')])
+          except ValueError:results['digest_conflict_rejected']=True
+          with conn() as c:
+            with c.cursor() as cur:
+              cur.execute('SELECT v FROM test_items WHERE k=%s',('a',))
+              results['conflict_preserves_original']=cur.fetchone()[0]=='1'
+          results['lost_acknowledgement_replay']=apply('w1',[('a','1')])=='replay'
+          c1,c2=conn(),conn()
+          try:
+            with c1.transaction():
+              c1.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',('concurrent',))
+              with c2.transaction():
+                c2.execute("SET LOCAL lock_timeout='200ms'")
+                try:c2.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',('concurrent',))
+                except LockNotAvailable:results['concurrent_window_lock']=True
+          finally:
+            c1.close()
+            c2.close()
+          results['separate_window_commit']=apply('w2',[('b','2')])=='committed'
+          with conn() as c:
+            with c.cursor() as cur:
+              cur.execute('SELECT count(*) FROM test_checkpoints')
+              results['checkpoint_count_correct']=cur.fetchone()[0]==2
+              cur.execute('SELECT count(*) FROM test_items')
+              results['row_count_correct']=cur.fetchone()[0]==2
+          report={'scope':'ephemeral PostgreSQL 16 service; not Supabase or production',
+            'checks':results,'passed':sum(bool(v) for v in results.values()),
+            'total':len(results),'production_writes':0,
+            'limitations':['No Supabase RLS or deployment-specific grants tested',
+                           'No supplier ingestion or production checkpoint mutation',
+                           'A successful isolated transaction test is not a production guarantee']}
+          with open('postgres-safety-report.json','w') as f:json.dump(report,f,indent=2,sort_keys=True)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+            f.write('## Isolated PostgreSQL safety tests\n\n')
+            for name,ok in results.items():f.write('- '+('PASS' if ok else 'FAIL')+': '+name+'\n')
+            f.write('\n**Production writes:** 0. No Supabase connection.\n')
+          for name,ok in results.items():print(('PASS' if ok else 'FAIL')+': '+name)
+          if not results or not all(results.values()):raise SystemExit('PostgreSQL safety checks failed')
+          PY
+      - name: Upload PostgreSQL safety report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-postgres-safety
+          path: postgres-safety-report.json
+          if-no-files-found: ignore
+          retention-days: 7

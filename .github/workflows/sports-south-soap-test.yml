@@ -384,6 +384,26 @@ jobs:
             print('Stored IDs absent from brand reference:',sum(str(row.get('brand_id') or '').strip() not in known for _,row,_ in mismatches))
             print('Incoming IDs absent from brand reference:',sum(fields.get('IMFGNO','') not in known for _,_,fields in mismatches))
             print('Both IDs valid but different:',sum(str(row.get('brand_id') or '').strip() in known and fields.get('IMFGNO','') in known for _,row,fields in mismatches))
+            # Resolve only the six (or fewer) distinct mismatched ID pairs into
+            # reference-table manufacturer names; never expose product or account data.
+            brand_names={}
+            for start in range(0,len(brand_list),50):
+              batch=brand_list[start:start+50]
+              query=urllib.parse.urlencode({'select':'brand_id,brand_name',
+                'brand_id':'in.('+','.join('"'+v.replace('"','')+'"' for v in batch)+')'})
+              request=urllib.request.Request(brand_endpoint+'?'+query,headers={
+                'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
+              with urllib.request.urlopen(request,timeout=25) as response:
+                for brand in json.load(response):
+                  brand_names[str(brand['brand_id'])]=str(brand.get('brand_name') or '')
+            print('BRAND REASSIGNMENT PAIRS (reference names only)')
+            for (old,new),count in sorted(pairs.items(),key=lambda pair:(-pair[1],pair[0])):
+              # Supplier catalog brand names only, never product details or credentials.
+              old_name=brand_names.get(old,'[not found]')
+              new_name=brand_names.get(new,'[not found]')
+              print('Existing brand %s (%s) -> incoming brand %s (%s): %d products'%(
+                old,old_name[:100],new,new_name[:100],count))
+            print('Review manufacturer naming and possible reclassification before approving updates.')
             print('Brand assignments remain unchanged; discrepancies require review.')
           print('No raw supplier values, customer identifiers, or credentials printed.')
           print('Database writes: 0; sync checkpoints changed: 0')

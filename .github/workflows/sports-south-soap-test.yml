@@ -932,7 +932,7 @@ jobs:
           status="$(curl --silent --show-error --max-time 50 --tlsv1.2 --tls-max 1.2 \
             --ciphers 'ECDHE-RSA-AES128-SHA256' \
             --header 'Content-Type: text/xml; charset=utf-8' \
-            --header "SOAPAction: \"$SOAP_ACTION\"" \ \
+            --header "SOAPAction: \"$SOAP_ACTION\"" \
             --data-binary @/tmp/ss-continuation-request.xml \
             --output /tmp/ss-continuation-response.xml --write-out '%{http_code}' \
             'https://webservices.theshootingwarehouse.com/smart/inventory.asmx')"

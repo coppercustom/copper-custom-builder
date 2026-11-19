@@ -48,10 +48,32 @@ jobs:
           ET.ElementTree(root).write('/tmp/ss-request.xml',encoding='utf-8',xml_declaration=True)
           print('SOAP 1.1 request generated (body withheld).')
           PY
+          curl --fail --silent --show-error --max-time 25 --tlsv1.2 --tls-max 1.2 \
+            --ciphers 'ECDHE-RSA-AES128-SHA256' \
+            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx?WSDL' \
+            --output /tmp/ss.wsdl
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root=ET.parse('/tmp/ss.wsdl').getroot()
+          ws='{http://schemas.xmlsoap.org/wsdl/}'
+          soap='{http://schemas.xmlsoap.org/wsdl/soap/}'
+          actions=[]
+          for binding in root.findall(ws+'binding'):
+            if binding.find(soap+'binding') is None: continue
+            for op in binding.findall(ws+'operation'):
+              if op.get('name')=='DailyItemUpdate':
+                action=op.find(soap+'operation')
+                if action is not None and action.get('soapAction'):
+                  actions.append(action.get('soapAction'))
+          if len(set(actions))!=1: raise SystemExit('Missing or ambiguous SOAP 1.1 action')
+          with open('/tmp/ss-action','w') as out: out.write(actions[0])
+          print('SOAPAction extracted from WSDL; matches hardcoded previous action:',actions[0]=='https://webservices.theshootingwarehouse.com/smart/inventory.asmx/DailyItemUpdate')
+          PY
+          SOAP_ACTION="$(cat /tmp/ss-action)"
           status="$(curl --silent --show-error --max-time 50 --tlsv1.2 --tls-max 1.2 \
             --ciphers 'ECDHE-RSA-AES128-SHA256' \
             --header 'Content-Type: text/xml; charset=utf-8' \
-            --header 'SOAPAction: "https://webservices.theshootingwarehouse.com/smart/inventory.asmx/DailyItemUpdate"' \
+            --header "SOAPAction: \"$SOAP_ACTION\"" \
             --data-binary @/tmp/ss-request.xml \
             --output /tmp/ss-response.xml --write-out '%{http_code}' \
             'https://webservices.theshootingwarehouse.com/smart/inventory.asmx')"
@@ -122,4 +144,4 @@ jobs:
       - name: Remove temporary supplier data
         if: always()
         shell: bash
-        run: rm -f /tmp/ss-request.xml /tmp/ss-response.xml
+        run: rm -f /tmp/ss-request.xml /tmp/ss-response.xml /tmp/ss.wsdl /tmp/ss-action

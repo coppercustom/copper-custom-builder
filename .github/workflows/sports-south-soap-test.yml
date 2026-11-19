@@ -224,6 +224,36 @@ jobs:
               print('Inner result is not directly parseable XML')
           else:
             print('Result text appears non-XML or empty; content withheld')
+          # Dry-run only: parse supplier rows and assess safe import candidates.
+          if not (result.text or '').strip():
+            raise SystemExit('Empty supplier result; refusing to treat as valid update')
+          data=ET.fromstring(result.text)
+          rows=[x for x in data if x.tag.split('}')[-1]=='Table']
+          seen=set()
+          duplicates=missing_id=valid=0
+          fields=Counter()
+          for row in rows:
+            record={child.tag.split('}')[-1].upper():(child.text or '').strip() for child in row}
+            fields.update(record.keys())
+            item=record.get('ITEMNO','')
+            if not item:
+              missing_id+=1
+              continue
+            if item in seen:
+              duplicates+=1
+              continue
+            seen.add(item)
+            valid+=1
+          if len(rows)==0: raise SystemExit('No Table records in supplier response')
+          if missing_id or duplicates: raise SystemExit('Dry-run validation failed: missing or duplicate ITEMNO')
+          print('DRY RUN - supplier records:',len(rows))
+          print('DRY RUN - unique ITEMNO candidates:',valid)
+          print('DRY RUN - missing ITEMNO:',missing_id)
+          print('DRY RUN - duplicate ITEMNO:',duplicates)
+          print('DRY RUN - field coverage:',{k:fields[k] for k in ('ITEMNO','IDESC','SHDESC','IMFGNO','IMFSEQ','ITYPE','CATCD')})
+          print('DRY RUN - pricing fields explicitly excluded from planned import.')
+          print('DRY RUN - insert/update/skip comparison pending read-only database lookup.')
+          print('DRY RUN - database writes: 0; sync checkpoint changes: 0.')
           print('SOAP 1.1 request succeeded; response structure inspected; no data imported.')
           PY
       - name: Remove temporary supplier data

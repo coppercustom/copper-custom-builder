@@ -315,14 +315,14 @@ jobs:
           seen=set(ids)
           all_rows=list(rows)
           page_counts=[len(ids)]
-          previous_cursor=-1
-          # Max 10 pages / 10,000 rows, 50s per request. Stop on partial
-          # page; a full tenth page is inconclusive and fails closed.
+          used_cursors=set()
+          # Vendor contract: LastItem is the LAST ITEMNO RETURNED, not the
+          # numerically largest ITEMNO. Bound to 10 pages / 10,000 rows.
           for page in range(2,11):
             if page_counts[-1]<1000: break
-            cursor=max(map(int,ids))
-            if cursor<=previous_cursor: raise SystemExit('Nonadvancing supplier cursor')
-            previous_cursor=cursor
+            cursor=ids[-1]
+            if cursor in used_cursors: raise SystemExit('Repeated supplier continuation cursor')
+            used_cursors.add(cursor)
             req=ET.parse(request_path)
             matches=[e for e in req.getroot().iter() if e.tag.split('}')[-1]=='LastItem']
             if len(matches)!=1: raise SystemExit('Ambiguous LastItem parameter')
@@ -339,8 +339,10 @@ jobs:
             subprocess.run(cmd,check=True,timeout=60)
             _,_,_,new_rows,new_ids=parse(next_response)
             if set(new_ids)&seen: raise SystemExit('Overlapping supplier pages; refusing incomplete audit')
-            if new_ids and min(map(int,new_ids))<=cursor:
-              raise SystemExit('Supplier page is not strictly beyond LastItem cursor')
+            # Do not impose numeric sorting: the vendor only specifies
+            # continuing after the last returned item, not numeric order.
+            if new_ids and new_ids[-1] in used_cursors:
+              raise SystemExit('Supplier continuation cursor repeated')
             seen.update(new_ids)
             all_rows.extend(new_rows)
             page_counts.append(len(new_ids))

@@ -701,12 +701,17 @@ jobs:
             'incoming_count':len(incoming),
             'possible_supplier_page_cap':response_at_possible_cap,
             'pagination_audit':pagination,
-            'supplier_pagination_verified':False,
+            'supplier_pagination_verified':pagination['bounded_pagination_passed'],
+            'supplier_pagination_contract':'Sports South Getting Started with Web Services, p.2: 1000 per page, LastItem=last returned ITEMNO; -1 bypasses limit',
+            'pagination_contract_documented':True,
+            'pagination_runtime_validated':pagination['bounded_pagination_passed'],
             'cursor_advancement_permitted':False,
             'existing_count':len(existing),
             'new_count':len(incoming_new),
             'eligible_insert_count':len(insert_plan),
             'held_new_counts':dict(held_new),
+            'held_new_id_hashes_by_reason':{},
+            'brand_conflict_id_hashes':[fingerprint(item) for item,_,_ in sorted(mismatches)],
             'update_count':len(update_plan),
             'unchanged_count':len(existing)-len(update_plan),
             'brand_conflict_count':len(mismatches),
@@ -720,6 +725,7 @@ jobs:
             'insert_id_hashes':[fingerprint(i) for i in sorted(insert_plan)],
             'update_field_counts':dict(Counter(field for _,changed in update_plan for field in changed)),
           }
+          # Read-only triage identifiers are hashed; no supplier catalog values exported.
           # Exact approval fingerprint covers every allowed target field and
           # the pre-import snapshot, not merely item IDs or change counts.
           # Never print the raw canonical payload (contains supplier catalog data).
@@ -736,6 +742,14 @@ jobs:
             canonical_updates.append({'item_no':item,
               'before':{column:row.get(column) for column in sorted(set(columns+['brand_id']))},
               'after':{column:fields.get(safe_map[column],'') for column in sorted(columns)}})
+          for item,fields in incoming_new.items():
+            reason=('missing_required_fields' if item in invalid_new else
+                    'duplicate_upc_candidate' if fields.get('ITUPC','').strip() in blocked_upcs else
+                    'duplicate_part_number_candidate' if fields.get('MFGINO','').strip() in blocked_mpns else
+                    'missing_upc_manual_review' if not fields.get('ITUPC','').strip() else None)
+            if reason:
+              report['held_new_id_hashes_by_reason'].setdefault(reason,[]).append(fingerprint(item))
+          for ids_for_reason in report['held_new_id_hashes_by_reason'].values(): ids_for_reason.sort()
           report['approved_payload_digest']=hashlib.sha256(json.dumps({
             'inserts':canonical_inserts,'updates':canonical_updates
           },sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -801,10 +815,11 @@ jobs:
           report['incremental_readiness']['automatic_schedule_enabled']=False
           print('DAILY CURSOR: PASS; initialized:',bool(cursor_value),'; no writes.')
           report['incremental_readiness']['bounded_pagination_passed']=pagination['bounded_pagination_passed']
-          report['incremental_readiness']['supplier_response_completeness_verified']=False
-          report['incremental_readiness']['cursor_advancement_blocked_by_completeness']=True
-          report['incremental_readiness']['cursor_window_selection_ready']=bool(cursor_value) and not response_at_possible_cap
-          print('INCREMENTAL GATE: BLOCKED pending verified supplier continuation; possible 1000-row cap:',response_at_possible_cap)
+          report['incremental_readiness']['supplier_response_completeness_verified']=pagination['bounded_pagination_passed']
+          report['incremental_readiness']['cursor_advancement_blocked_by_completeness']=not pagination['bounded_pagination_passed']
+          report['incremental_readiness']['cursor_window_selection_ready']=bool(cursor_value) and pagination['bounded_pagination_passed']
+          print('PAGINATION CONTRACT: documented by supplier; bounded read-only pagination passed:',pagination['bounded_pagination_passed'])
+          print('INCREMENTAL WRITES: LOCKED; cursor-driven scheduling and transaction safety not enabled.')
 
           # Simulate interrupted batches without performing any network writes.
           # A resumed run must skip already-applied inserts and updates and stop

@@ -26,16 +26,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          curl --fail --silent --show-error --max-time 25 --tlsv1.2 --tls-max 1.2 \
+            --ciphers 'ECDHE-RSA-AES128-SHA256' \
+            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx?WSDL' \
+            --output /tmp/ss.wsdl
           python3 - <<'PY'
-          import os, datetime, xml.etree.ElementTree as ET
-          from xml.sax.saxutils import escape
-          ns='http://webservices.theshootingwarehouse.com/smart/inventory.asmx'
-          env='http://schemas.xmlsoap.org/soap/envelope/'
-          ET.register_namespace('soap',env)
-          root=ET.Element('{%s}Envelope'%env)
-          body=ET.SubElement(root,'{%s}Body'%env)
-          operation=ET.SubElement(body,'{%s}DailyItemUpdate'%ns)
-          fields={
+          import os,datetime,xml.etree.ElementTree as ET
+          wsdl=ET.parse('/tmp/ss.wsdl').getroot()
+          xs='{http://www.w3.org/2001/XMLSchema}'
+          schemas=[s for s in wsdl.findall('.//'+xs+'schema')
+                   if any(e.get('name')=='DailyItemUpdate' for e in s.findall(xs+'element'))]
+          if len(schemas)!=1: raise SystemExit('Expected one DailyItemUpdate schema')
+          schema=schemas[0]
+          ns=schema.get('targetNamespace')
+          qualified=schema.get('elementFormDefault')=='qualified'
+          element=next(e for e in schema.findall(xs+'element') if e.get('name')=='DailyItemUpdate')
+          definitions=element.findall('.//'+xs+'sequence/'+xs+'element')
+          values={
             'CustomerNumber':os.environ['SS_CUSTOMER'],
             'UserName':os.environ['SS_USERNAME'],
             'Password':os.environ['SS_PASSWORD'],
@@ -43,15 +50,21 @@ jobs:
             'LastItem':'0',
             'Source':''
           }
-          for name,value in fields.items():
-            ET.SubElement(operation,'{%s}%s'%(ns,name)).text=value
+          env='http://schemas.xmlsoap.org/soap/envelope/'
+          ET.register_namespace('soap',env)
+          ET.register_namespace('svc',ns)
+          root=ET.Element('{%s}Envelope'%env)
+          body=ET.SubElement(root,'{%s}Body'%env)
+          operation=ET.SubElement(body,'{%s}DailyItemUpdate'%ns)
+          for definition in definitions:
+            name=definition.get('name')
+            if name not in values: raise SystemExit('Unexpected WSDL parameter: '+name)
+            tag=('{%s}%s'%(ns,name)) if qualified else name
+            ET.SubElement(operation,tag).text=values[name]
+          if len(definitions)!=len(values): raise SystemExit('WSDL parameter count mismatch')
           ET.ElementTree(root).write('/tmp/ss-request.xml',encoding='utf-8',xml_declaration=True)
-          print('SOAP 1.1 request generated (body withheld).')
+          print('SOAP request generated from live WSDL schema (body withheld).')
           PY
-          curl --fail --silent --show-error --max-time 25 --tlsv1.2 --tls-max 1.2 \
-            --ciphers 'ECDHE-RSA-AES128-SHA256' \
-            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx?WSDL' \
-            --output /tmp/ss.wsdl
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
           root=ET.parse('/tmp/ss.wsdl').getroot()

@@ -1,0 +1,42 @@
+name: Sports South binding inspection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-binding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Inspect DailyItemUpdate SOAP and HTTP bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 25 --tlsv1.2 --tls-max 1.2 \
+            --ciphers 'ECDHE-RSA-AES128-SHA256' \
+            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx?WSDL' \
+            -o /tmp/ss.wsdl
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root=ET.parse('/tmp/ss.wsdl').getroot()
+          w='{http://schemas.xmlsoap.org/wsdl/}'
+          soap='{http://schemas.xmlsoap.org/wsdl/soap/}'
+          http='{http://schemas.xmlsoap.org/wsdl/http/}'
+          for binding in root.findall(w+'binding'):
+              op=next((x for x in binding.findall(w+'operation') if x.get('name')=='DailyItemUpdate'),None)
+              if op is None: continue
+              print('Binding:',binding.get('name'))
+              sb=binding.find(soap+'binding')
+              hb=binding.find(http+'binding')
+              print('Binding type:', 'SOAP' if sb is not None else 'HTTP' if hb is not None else 'Other')
+              action=op.find(soap+'operation')
+              if action is not None: print('SOAP action:',action.get('soapAction'))
+              print('Operation extensions:', ', '.join(x.tag.split('}')[-1] for x in op if x.tag.startswith('{')))
+          for service in root.findall(w+'service'):
+              for port in service.findall(w+'port'):
+                  address=port.find(soap+'address')
+                  if address is not None: print('SOAP service port:',port.get('name'),'endpoint:',address.get('location'))
+          PY

@@ -2,6 +2,13 @@ name: Sports South SOAP 1.1 authenticated test
 
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Execution mode (production intentionally locked until approval)'
+        type: choice
+        options:
+          - dry_run
+        default: dry_run
 
 permissions:
   contents: read
@@ -259,6 +266,7 @@ jobs:
       - name: Compare supplier records with Supabase (read only)
         shell: bash
         env:
+          IMPORT_MODE: ${{ inputs.mode }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
@@ -502,11 +510,76 @@ jobs:
           print('Supplier attribute field nonempty counts:',dict(sorted(attribute_candidates.items())))
           print('Attributes action: preserve existing JSON; do not map or overwrite yet.')
           print('Potential cross-supplier matches require manufacturer and product-class verification.')
+          # Build an explicit allowlisted import plan, without persisting supplier records.
+          # Never serialize raw SOAP fields, which include prohibited supplier pricing.
+          if os.environ.get('GITHUB_EVENT_NAME')!='workflow_dispatch':
+            raise SystemExit('Unexpected invocation type')
+          if os.environ.get('IMPORT_MODE','dry_run')!='dry_run':
+            raise SystemExit('Production import is not authorized or implemented')
+          blocked_upcs=existing_upc_matches | repeated_new_upcs | match_upcs
+          blocked_mpns=match_mpns
+          insert_plan=[]
+          held_new=Counter()
+          for item,fields in incoming_new.items():
+            if item in invalid_new: held_new['missing_required_fields']+=1; continue
+            if fields.get('ITUPC','').strip() in blocked_upcs:
+              held_new['duplicate_upc_candidate']+=1; continue
+            if fields.get('MFGINO','').strip() in blocked_mpns:
+              held_new['duplicate_part_number_candidate']+=1; continue
+            if not fields.get('ITUPC','').strip():
+              held_new['missing_upc_manual_review']+=1; continue
+            insert_plan.append(item)
+          update_plan=[]
+          for item,fields in incoming.items():
+            if item not in existing: continue
+            row=existing[item]
+            changed=[column for column,source in safe_map.items()
+                     if str(row.get(column) or '').strip()!=fields.get(source,'').strip()]
+            if changed: update_plan.append((item,changed))
+          # ID hashes allow comparing reruns without leaking supplier records.
+          import hashlib
+          fingerprint=lambda item: hashlib.sha256(item.encode()).hexdigest()[:12]
+          report={
+            'mode':'dry_run',
+            'incoming_count':len(incoming),
+            'existing_count':len(existing),
+            'new_count':len(incoming_new),
+            'eligible_insert_count':len(insert_plan),
+            'held_new_counts':dict(held_new),
+            'update_count':len(update_plan),
+            'unchanged_count':len(existing)-len(update_plan),
+            'brand_conflict_count':len(mismatches),
+            'cross_supplier_candidate_count':cross_either,
+            'attribute_action':'preserve_existing',
+            'supplier_pricing':'excluded',
+            'database_writes':0,
+            'sync_checkpoint_writes':0,
+            'insert_id_hashes':[fingerprint(i) for i in sorted(insert_plan)],
+            'update_field_counts':dict(Counter(field for _,changed in update_plan for field in changed)),
+          }
+          with open('/tmp/ss-import-readiness.json','w') as output:
+            json.dump(report,output,indent=2,sort_keys=True)
+          print('=== FINAL IMPORT PLAN (NO WRITES) ===')
+          print('Eligible inserts:',len(insert_plan))
+          print('Held new records by reason:',dict(held_new))
+          print('Verified-field updates:',len(update_plan))
+          print('Update fields:',report['update_field_counts'])
+          print('Unchanged existing:',report['unchanged_count'])
+          print('Report: ss-import-readiness.json (hashed IDs, counts only)')
+          print('Production mode: LOCKED pending explicit approval and further validation.')
           print('Decision: DRY RUN ONLY. No inserts, updates, checkpoint changes or supplier pricing.')
           print('No raw supplier values, customer identifiers, or credentials printed.')
           print('Database writes: 0; sync checkpoints changed: 0')
           PY
+      - name: Upload sanitized import-readiness report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sports-south-import-readiness
+          path: /tmp/ss-import-readiness.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Remove temporary supplier data
         if: always()
         shell: bash
-        run: rm -f /tmp/ss-request.xml /tmp/ss-response.xml /tmp/ss.wsdl /tmp/ss-action
+        run: rm -f /tmp/ss-request.xml /tmp/ss-response.xml /tmp/ss.wsdl /tmp/ss-action /tmp/ss-import-readiness.json

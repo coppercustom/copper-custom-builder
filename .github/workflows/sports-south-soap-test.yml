@@ -347,6 +347,44 @@ jobs:
               print('  %s: %d/%d exact matches'%(field,equal,comparable))
           print('Candidate mapping hypothesis: manufacturer_item_no=MFGINO, category_id=CATID, brand_id=IMFGNO, model=IMODEL, upc=ITUPC, image_ref=PICREF.')
           print('Candidate equality alone does not authorize production writes; inspect nonmatching rows separately.')
+          # Brand mismatch audit: report aggregate causes and anonymized item fingerprints.
+          # A missing brand in the local reference table is NOT permission to overwrite.
+          mismatches=[(item,existing[item],fields) for item,fields in incoming.items()
+                      if item in existing and str(existing[item].get('brand_id') or '').strip()!=fields.get('IMFGNO','')]
+          if mismatches:
+            from collections import Counter
+            import hashlib
+            print('BRAND ID DISCREPANCY AUDIT')
+            print('Mismatched records:',len(mismatches))
+            print('Stored brand IDs distinct:',len(set(str(row.get('brand_id') or '') for _,row,_ in mismatches)))
+            print('Incoming brand IDs distinct:',len(set(fields.get('IMFGNO','') for _,_,fields in mismatches)))
+            print('Incoming brand IDs blank:',sum(not fields.get('IMFGNO','') for _,_,fields in mismatches))
+            print('Stored brand IDs blank:',sum(not str(row.get('brand_id') or '').strip() for _,row,_ in mismatches))
+            print('Whitespace-only differences:',sum(str(row.get('brand_id') or '').strip()==fields.get('IMFGNO','').strip() for _,row,fields in mismatches))
+            print('Leading-zero differences:',sum(str(row.get('brand_id') or '').strip().lstrip('0')==fields.get('IMFGNO','').lstrip('0') for _,row,fields in mismatches))
+            pairs=Counter((str(row.get('brand_id') or '').strip(),fields.get('IMFGNO','')) for _,row,fields in mismatches)
+            print('Distinct old/new brand pairs:',len(pairs))
+            print('Most common brand-pair counts:',sorted(pairs.values(),reverse=True)[:10])
+            print('Anonymized affected item count:',len(set(hashlib.sha256(item.encode()).hexdigest()[:12] for item,_,_ in mismatches)))
+            # Check whether the incoming and stored IDs are known to the supplier's brand reference catalog.
+            brand_endpoint='https://cyrmysbcrpiadchcpsfa.supabase.co/rest/v1/cc_sports_south_brands'
+            brand_ids=set(str(row.get('brand_id') or '').strip() for _,row,_ in mismatches)
+            brand_ids.update(fields.get('IMFGNO','') for _,_,fields in mismatches)
+            brand_ids.discard('')
+            known=set()
+            brand_list=sorted(brand_ids)
+            for start in range(0,len(brand_list),50):
+              batch=brand_list[start:start+50]
+              query=urllib.parse.urlencode({'select':'brand_id',
+                'brand_id':'in.('+','.join('"'+v.replace('"','')+'"' for v in batch)+')'})
+              request=urllib.request.Request(brand_endpoint+'?'+query,headers={
+                'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
+              with urllib.request.urlopen(request,timeout=25) as response:
+                for brand in json.load(response): known.add(str(brand['brand_id']))
+            print('Stored IDs absent from brand reference:',sum(str(row.get('brand_id') or '').strip() not in known for _,row,_ in mismatches))
+            print('Incoming IDs absent from brand reference:',sum(fields.get('IMFGNO','') not in known for _,_,fields in mismatches))
+            print('Both IDs valid but different:',sum(str(row.get('brand_id') or '').strip() in known and fields.get('IMFGNO','') in known for _,row,fields in mismatches))
+            print('Brand assignments remain unchanged; discrepancies require review.')
           print('No raw supplier values, customer identifiers, or credentials printed.')
           print('Database writes: 0; sync checkpoints changed: 0')
           PY

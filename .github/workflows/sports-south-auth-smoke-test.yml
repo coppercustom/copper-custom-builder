@@ -51,12 +51,17 @@ jobs:
           path='/tmp/sports-south-response.xml'
           size=os.path.getsize(path)
           print('Response bytes:',size)
+          raw=open(path,'rb').read()
+          import hashlib
+          print('Response SHA256:',hashlib.sha256(raw).hexdigest())
+          print('Response type:', 'XML-like' if raw.lstrip().startswith(b'<') else 'JSON-like' if raw.lstrip().startswith((b'{',b'[')) else 'Other/plain text')
+          print('Contains HTML markers:', b'<html' in raw.lower() or b'<!doctype html' in raw.lower())
           if size>20_000_000:
               raise SystemExit('Response exceeds smoke-test safety limit')
           try:
               root=ET.parse(path).getroot()
           except ET.ParseError:
-              raise SystemExit('Response was not valid XML (contents withheld)')
+              raise SystemExit('Response was not valid XML; status/type/hash logged, contents withheld')
           print('XML root element:',root.tag.split('}')[-1])
           print('Top-level child elements:', ', '.join(child.tag.split('}')[-1] for child in list(root)[:10]))
           fault=next((e for e in root.iter() if e.tag.split('}')[-1].lower() in ('fault','faultstring')),None)

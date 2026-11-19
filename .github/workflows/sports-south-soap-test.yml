@@ -398,11 +398,17 @@ jobs:
           # Pagination audit runs before reconciliation; full combined response is expected.\n          # Exactly 1000 rows was observed in the expanded window. Until
           # continuation semantics are verified against the supplier WSDL,
           # treat this as a possible truncated page, not a complete delta.
-          response_at_possible_cap=(len(incoming)>=1000)
+          # Initial page may hit the supplier's 1000-row limit; use the
+          # validated multi-page summary rather than treating the total as
+          # an unverified first-page response.
+          pagination_status=json.load(open('/tmp/ss-pagination-summary.json'))
+          response_at_possible_cap=(not pagination_status.get('bounded_pagination_passed',False))
           if response_at_possible_cap:
-            print('::warning::Supplier returned >=1000 rows; completeness NOT established. No cursor advancement permitted.')
-          else:
-            print('Supplier response below observed 1000-row boundary; completeness still subject to supplier semantics.')
+            raise SystemExit('Supplier pagination not verified; abort read-only reconciliation')
+          if pagination_status.get('total_unique')!=len(incoming):
+            raise SystemExit('Supplier pagination summary does not match parsed records')
+          print('Supplier pagination complete: %d unique records across %d pages; no cursor advancement.'%(
+            len(incoming),pagination_status['pages']))
 
           if len(incoming)>10000: raise SystemExit('Safety stop: unexpected supplier response size')
           endpoint='https://cyrmysbcrpiadchcpsfa.supabase.co/rest/v1/cc_sports_south_products'

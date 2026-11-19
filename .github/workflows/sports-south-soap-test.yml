@@ -635,6 +635,29 @@ jobs:
           }
           print('INCREMENTAL READINESS: legacy checkpoint exists; daily cursor and scheduling not yet enabled.')
           print('Incremental readiness: read-only; checkpoint writes: 0.')
+          # Dedicated daily cursor: read-only until an explicitly approved
+          # incremental write transaction is implemented. Never advance a
+          # cursor based on a dry run, partial batch, or SOAP HTTP success.
+          daily_endpoint='https://cyrmysbcrpiadchcpsfa.supabase.co/rest/v1/cc_sports_south_daily_sync_state'
+          daily_query=urllib.parse.urlencode({
+            'select':'sync_name,last_successful_window_end,last_successful_run_at,last_payload_digest,last_processed_count',
+            'sync_name':'eq.daily_item_update'})
+          daily_request=urllib.request.Request(daily_endpoint+'?'+daily_query,headers={
+            'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
+          with urllib.request.urlopen(daily_request,timeout=25) as response:
+            daily_states=json.load(response)
+          if len(daily_states)!=1:
+            raise SystemExit('Daily cursor missing or duplicated; abort')
+          daily_state=daily_states[0]
+          cursor_value=daily_state.get('last_successful_window_end')
+          if cursor_value and not daily_state.get('last_successful_run_at'):
+            raise SystemExit('Daily cursor inconsistent: window end without successful run')
+          report['incremental_readiness']['daily_cursor_configured']=True
+          report['incremental_readiness']['daily_cursor_initialized']=bool(cursor_value)
+          report['incremental_readiness']['daily_cursor_writes']=0
+          report['incremental_readiness']['safe_window_strategy']='overlap and recheck, pending implementation'
+          report['incremental_readiness']['automatic_schedule_enabled']=False
+          print('DAILY CURSOR: PASS; initialized:',bool(cursor_value),'; no writes.')
           # Simulate interrupted batches without performing any network writes.
           # A resumed run must skip already-applied inserts and updates and stop
           # if a record diverges from both its approved before/after snapshots.

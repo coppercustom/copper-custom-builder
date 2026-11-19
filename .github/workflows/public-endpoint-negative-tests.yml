@@ -1,0 +1,37 @@
+name: Public endpoint negative security checks
+on:
+  push:
+    paths:
+      - '.github/workflows/public-endpoint-negative-tests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  negative-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Verify rejection paths without valid customer submissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="https://cyrmysbcrpiadchcpsfa.supabase.co/functions/v1"
+          failures=0
+          check() {
+            label="$1"; expected="$2"; shift 2
+            status=$(curl --silent --show-error --max-time 15 -o /dev/null -w '%{http_code}' "$@")
+            echo "$label: HTTP $status (expected $expected)"
+            if [ "$status" != "$expected" ]; then failures=$((failures+1)); fi
+          }
+          # Consultation: rejection before Turnstile/database/email.
+          check consultation_disallowed_origin 403 -X POST "$ROOT/submit-copper-consultation" -H 'origin: https://invalid.example' -H 'content-type: application/json' --data '{}'
+          check consultation_missing_origin 403 -X POST "$ROOT/submit-copper-consultation" -H 'content-type: application/json' --data '{}'
+          check consultation_wrong_method 405 -X GET "$ROOT/submit-copper-consultation" -H 'origin: https://coppercustom.com'
+          check consultation_malformed_json 400 -X POST "$ROOT/submit-copper-consultation" -H 'origin: https://coppercustom.com' -H 'content-type: application/json' --data '{'
+          check consultation_invalid_contact 400 -X POST "$ROOT/submit-copper-consultation" -H 'origin: https://coppercustom.com' -H 'content-type: application/json' --data '{}'
+          # Employee functions: rejection before request body is processed.
+          check lights_missing_auth 401 -X POST "$ROOT/cc-weapon-light-review" -H 'origin: https://coppercustom.com' -H 'content-type: application/json' --data '{}'
+          check lights_invalid_origin 403 -X POST "$ROOT/cc-weapon-light-review" -H 'origin: https://invalid.example' -H 'content-type: application/json' --data '{}'
+          check accessories_missing_auth 401 -X POST "$ROOT/cc-provisional-accessories" -H 'content-type: application/json' --data '{}'
+          echo "Unexpected responses: $failures"
+          test "$failures" -eq 0

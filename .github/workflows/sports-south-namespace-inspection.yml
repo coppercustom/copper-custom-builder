@@ -1,0 +1,41 @@
+name: Sports South SOAP namespace inspection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Inspect WSDL namespace and DailyItemUpdate schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 25 --tlsv1.2 --tls-max 1.2 \
+            --ciphers 'ECDHE-RSA-AES128-SHA256' \
+            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx?WSDL' \
+            --output /tmp/ss.wsdl
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root=ET.parse('/tmp/ss.wsdl').getroot()
+          ws='{http://schemas.xmlsoap.org/wsdl/}'
+          xs='{http://www.w3.org/2001/XMLSchema}'
+          print('WSDL targetNamespace:',root.get('targetNamespace'))
+          for schema in root.findall('.//'+xs+'schema'):
+            element=next((e for e in schema.findall(xs+'element') if e.get('name')=='DailyItemUpdate'),None)
+            if element is None: continue
+            print('DailyItemUpdate schema namespace:',schema.get('targetNamespace'))
+            print('elementFormDefault:',schema.get('elementFormDefault','unqualified (default)'))
+            print('Input fields:')
+            for child in element.findall('.//'+xs+'sequence/'+xs+'element'):
+              print(' -',child.get('name'),'type:',child.get('type'),'minOccurs:',child.get('minOccurs','1'),'nillable:',child.get('nillable','false'))
+          for binding in root.findall(ws+'binding'):
+            op=next((o for o in binding.findall(ws+'operation') if o.get('name')=='DailyItemUpdate'),None)
+            if op is not None:
+              print('Binding:',binding.get('name'))
+              print('Binding operation attributes:',{k:v for k,v in op.attrib.items()})
+          PY

@@ -11,16 +11,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Check trusted header handling (no sensitive values)
+      - name: Test each header independently; capture expected HTTP rejection
         shell: bash
         run: |
           set -euo pipefail
           URL="https://cyrmysbcrpiadchcpsfa.supabase.co/functions/v1/cc-gateway-header-diagnostic"
-          for mode in baseline forged; do
-            if [ "$mode" = baseline ]; then
-              curl --fail-with-body --silent --show-error --max-time 15 -X POST "$URL" -H 'x-cc-probe: gateway-header-test-v1' -H 'x-cc-sentinel: 192.0.2.123' -o result.json
+          for mode in baseline cf real forwarded combined; do
+            headers=()
+            case "$mode" in
+              cf) headers=(-H 'cf-connecting-ip: 192.0.2.123');;
+              real) headers=(-H 'x-real-ip: 192.0.2.123');;
+              forwarded) headers=(-H 'x-forwarded-for: 192.0.2.123');;
+              combined) headers=(-H 'cf-connecting-ip: 192.0.2.123' -H 'x-real-ip: 192.0.2.123' -H 'x-forwarded-for: 192.0.2.123');;
+            esac
+            status=$(curl --silent --show-error --max-time 15 -X POST "$URL" -H 'x-cc-probe: gateway-header-test-v1' -H 'x-cc-sentinel: 192.0.2.123' "${headers[@]}" -o result.json -w '%{http_code}')
+            echo "$mode HTTP $status"
+            if [ "$status" = 200 ]; then
+              python3 -c 'import json; d=json.load(open("result.json")); print({k:bool(v) for k,v in d.items()})'
+            elif [ "$status" = 403 ]; then
+              echo "$mode blocked upstream or by platform (no diagnostic response)"
             else
-              curl --fail-with-body --silent --show-error --max-time 15 -X POST "$URL" -H 'x-cc-probe: gateway-header-test-v1' -H 'x-cc-sentinel: 192.0.2.123' -H 'cf-connecting-ip: 192.0.2.123' -H 'x-real-ip: 192.0.2.123' -H 'x-forwarded-for: 192.0.2.123' -o result.json
+              echo "Unexpected HTTP status $status"
+              exit 1
             fi
-            echo "$mode: $(cat result.json)"
           done

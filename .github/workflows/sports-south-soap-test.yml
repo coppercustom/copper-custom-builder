@@ -57,7 +57,7 @@ jobs:
             'https://webservices.theshootingwarehouse.com/smart/inventory.asmx')"
           echo "HTTP status: $status"
           SS_HTTP_STATUS="$status" python3 - <<'PY'
-          import os,xml.etree.ElementTree as ET
+          import os,re,xml.etree.ElementTree as ET
           path='/tmp/ss-response.xml'
           print('Response bytes:',os.path.getsize(path))
           try: root=ET.parse(path).getroot()
@@ -75,7 +75,8 @@ jobs:
               print('SOAP fault code:',code)
             else:
               print('SOAP fault code: unrecognized (withheld)')
-            detail=value('faultstring').lower()
+            raw_detail=value('faultstring')
+            detail=raw_detail.lower()
             categories=[
               ('Authentication or authorization',('credential','password','username','user name','authentication','unauthorized','access denied','login','invalid user')),
               ('Customer account validation',('customer number','customernumber','account number','customer not found')),
@@ -86,7 +87,31 @@ jobs:
             ]
             classification=next((label for label,keywords in categories if any(k in detail for k in keywords)),'Unclassified SOAP fault')
             print('Sanitized fault classification:',classification)
-            print('Fault description withheld to protect credentials and supplier data.')
+            # Redact every known secret and avoid printing arbitrary supplier text.
+            safe=raw_detail
+            for secret_name in ('SS_CUSTOMER','SS_USERNAME','SS_PASSWORD'):
+              secret=os.environ.get(secret_name,'')
+              if secret: safe=safe.replace(secret,'[REDACTED]')
+            safe=re.sub(r'[\\w.+-]+@[\\w.-]+\\.[A-Za-z]{2,}','[EMAIL]',safe)
+            safe=re.sub(r'\\b\\d{4,}\\b','[NUMBER]',safe)
+            safe=re.sub(r'https?://\\S+','[URL]',safe)
+            # Only print known generic .NET/SOAP validation messages, never arbitrary errors.
+            patterns=[
+              r'Server was unable to read request',
+              r'There is an error in XML document',
+              r'Input string was not in a correct format',
+              r'was not recognized as a valid DateTime',
+              r'was not recognized as a valid Int32',
+              r'Value cannot be null',
+              r'Invalid SOAPAction',
+              r'Server did not recognize the value of HTTP Header SOAPAction',
+              r'Root element is missing',
+              r'Unexpected end of file',
+            ]
+            matched=[p for p in patterns if re.search(p,safe,re.I)]
+            print('Recognized SOAP validation phrases:', ', '.join(matched) if matched else 'none')
+            print('SOAP fault character count:',len(raw_detail))
+            print('Raw fault text withheld to protect credentials and supplier data.')
             raise SystemExit('SOAP fault returned; no catalog data modified')
           if os.environ['SS_HTTP_STATUS']!='200':
             raise SystemExit('Unexpected HTTP status; contents withheld')

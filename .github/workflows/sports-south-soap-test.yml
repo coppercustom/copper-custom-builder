@@ -202,7 +202,29 @@ jobs:
             raise SystemExit('Unexpected HTTP status; contents withheld')
           if 'DailyItemUpdateResult' not in names:
             raise SystemExit('Expected result element missing; contents withheld')
-          print('SOAP 1.1 request succeeded; no data imported.')
+          result=next((x for x in root.iter() if x.tag.split('}')[-1]=='DailyItemUpdateResult'),None)
+          if result is None: raise SystemExit('Result element missing')
+          from collections import Counter
+          from io import StringIO
+          print('Result immediate child count:',len(result))
+          print('Result immediate child tags:',dict(Counter(x.tag.split('}')[-1] for x in result)) if len(result) else {})
+          print('Result text characters:',len(result.text or ''))
+          print('Result nested element count:',sum(1 for _ in result.iter())-1)
+          # Inspect structural metadata only; never print supplier record values.
+          if len(result):
+            counts=Counter(x.tag.split('}')[-1] for x in result.iter())
+            print('Common nested XML element names:',counts.most_common(20))
+          elif (result.text or '').lstrip().startswith('<'):
+            try:
+              inner=ET.fromstring(result.text)
+              counts=Counter(x.tag.split('}')[-1] for x in inner.iter())
+              print('Escaped inner XML root:',inner.tag.split('}')[-1])
+              print('Common inner XML element names:',counts.most_common(20))
+            except ET.ParseError:
+              print('Inner result is not directly parseable XML')
+          else:
+            print('Result text appears non-XML or empty; content withheld')
+          print('SOAP 1.1 request succeeded; response structure inspected; no data imported.')
           PY
       - name: Remove temporary supplier data
         if: always()

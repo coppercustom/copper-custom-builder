@@ -329,6 +329,23 @@ jobs:
           print('Supplier field coverage:',{field:coverage[field] for field in sorted(coverage)})
           print('Not compared (mapping unverified): model, upc, brand_id, image_ref, attributes')
           print('Supplier pricing fields excluded; no pricing values logged or imported.')
+
+          # Diagnostic only: evaluate candidate source fields without changing stored data.
+          # Report aggregate equality and data shapes, not raw supplier values.
+          candidates=['IMFGNO','IMFSEQ','ITYPE','CATCD','CSEQ','IMODEL','IMFGPRTYP','SCNAM1','SCNAM2']
+          targets=['manufacturer_item_no','category_id','brand_id','model']
+          print('CANDIDATE FIELD MATCH MATRIX (existing records only)')
+          for target in targets:
+            present=sum(1 for item in incoming if item in existing and str(existing[item].get(target) or '').strip())
+            print('Target %s: populated existing values %d/%d'%(target,present,len(existing)))
+            scores=[]
+            for field in candidates:
+              comparable=sum(1 for item,values in incoming.items() if item in existing and field in values and str(existing[item].get(target) or '').strip() and values[field])
+              equal=sum(1 for item,values in incoming.items() if item in existing and field in values and str(existing[item].get(target) or '').strip() and values[field] and str(existing[item].get(target) or '').strip()==values[field])
+              if comparable: scores.append((equal,comparable,field))
+            for equal,comparable,field in sorted(scores,reverse=True):
+              print('  %s: %d/%d exact matches'%(field,equal,comparable))
+          print('No raw supplier values, customer identifiers, or credentials printed.')
           print('Database writes: 0; sync checkpoints changed: 0')
           PY
       - name: Remove temporary supplier data

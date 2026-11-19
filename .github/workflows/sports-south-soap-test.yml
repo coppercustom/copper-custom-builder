@@ -308,6 +308,15 @@ jobs:
             if not item or item in incoming: raise SystemExit('Invalid or duplicate ITEMNO')
             incoming[item]=fields
           if not incoming: raise SystemExit('No incoming rows')
+          # Exactly 1000 rows was observed in the expanded window. Until
+          # continuation semantics are verified against the supplier WSDL,
+          # treat this as a possible truncated page, not a complete delta.
+          response_at_possible_cap=(len(incoming)>=1000)
+          if response_at_possible_cap:
+            print('::warning::Supplier returned >=1000 rows; completeness NOT established. No cursor advancement permitted.')
+          else:
+            print('Supplier response below observed 1000-row boundary; completeness still subject to supplier semantics.')
+
           if len(incoming)>10000: raise SystemExit('Safety stop: unexpected supplier response size')
           endpoint='https://cyrmysbcrpiadchcpsfa.supabase.co/rest/v1/cc_sports_south_products'
           key=os.environ['SUPABASE_SERVICE_ROLE_KEY']
@@ -602,6 +611,9 @@ jobs:
             'production_enabled':False,
             'plan_digest':hashlib.sha256(json.dumps({'inserts':sorted(insert_plan),'updates':sorted((i,sorted(c)) for i,c in update_plan),'brand_conflicts':sorted(i for i,_,_ in mismatches)},sort_keys=True).encode()).hexdigest(),
             'incoming_count':len(incoming),
+            'possible_supplier_page_cap':response_at_possible_cap,
+            'supplier_pagination_verified':False,
+            'cursor_advancement_permitted':False,
             'existing_count':len(existing),
             'new_count':len(incoming_new),
             'eligible_insert_count':len(insert_plan),
@@ -699,6 +711,11 @@ jobs:
           report['incremental_readiness']['safe_window_strategy']='operator-selected UTC date lookback; cursor-driven scheduling pending'
           report['incremental_readiness']['automatic_schedule_enabled']=False
           print('DAILY CURSOR: PASS; initialized:',bool(cursor_value),'; no writes.')
+          report['incremental_readiness']['supplier_response_completeness_verified']=False
+          report['incremental_readiness']['cursor_advancement_blocked_by_completeness']=True
+          report['incremental_readiness']['cursor_window_selection_ready']=bool(cursor_value) and not response_at_possible_cap
+          print('INCREMENTAL GATE: BLOCKED pending verified supplier continuation; possible 1000-row cap:',response_at_possible_cap)
+
           # Simulate interrupted batches without performing any network writes.
           # A resumed run must skip already-applied inserts and updates and stop
           # if a record diverges from both its approved before/after snapshots.

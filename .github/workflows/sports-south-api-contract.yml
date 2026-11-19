@@ -1,0 +1,36 @@
+name: Sports South API contract inspection
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Retrieve Sports South WSDL with legacy TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 25 --tlsv1.2 --tls-max 1.2 \
+            --ciphers 'ECDHE-RSA-AES128-SHA256' \
+            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx?WSDL' \
+            -o /tmp/sports-south.wsdl
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse('/tmp/sports-south.wsdl').getroot()
+          ns = {'wsdl':'http://schemas.xmlsoap.org/wsdl/','xs':'http://www.w3.org/2001/XMLSchema'}
+          ops = [o.get('name') for o in root.findall('.//wsdl:portType/wsdl:operation',ns)]
+          print('Operations:', ', '.join(ops))
+          target = 'DailyItemUpdate'
+          print('DailyItemUpdate available:', target in ops)
+          for element in root.findall('.//xs:element',ns):
+              if element.get('name') == target:
+                  names = [e.get('name') for e in element.findall('.//xs:element',ns)]
+                  print('DailyItemUpdate input field names:', ', '.join(n for n in names if n))
+          if target not in ops:
+              raise SystemExit('Expected operation missing; inspect API contract before implementation')
+          PY

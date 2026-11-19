@@ -66,8 +66,30 @@ jobs:
           names=[x.tag.split('}')[-1] for x in root.iter()]
           print('SOAP fault present:', 'Fault' in names)
           print('DailyItemUpdateResult present:', 'DailyItemUpdateResult' in names)
-          if os.environ['SS_HTTP_STATUS']!='200' or 'Fault' in names:
-            raise SystemExit('SOAP response was unsuccessful; contents withheld')
+          if 'Fault' in names:
+            fault=next(x for x in root.iter() if x.tag.split('}')[-1]=='Fault')
+            def value(tag):
+              return next((x.text or '' for x in fault.iter() if x.tag.split('}')[-1].lower()==tag.lower()),'')
+            code=value('faultcode').split(':')[-1]
+            if code in ('Client','Server','Sender','Receiver','VersionMismatch','MustUnderstand'):
+              print('SOAP fault code:',code)
+            else:
+              print('SOAP fault code: unrecognized (withheld)')
+            detail=value('faultstring').lower()
+            categories=[
+              ('Authentication or authorization',('credential','password','username','user name','authentication','unauthorized','access denied','login','invalid user')),
+              ('Customer account validation',('customer number','customernumber','account number','customer not found')),
+              ('LastUpdate parameter validation',('lastupdate','last update','date format','invalid date')),
+              ('LastItem parameter validation',('lastitem','last item')),
+              ('Source parameter validation',('source parameter','invalid source','source is required')),
+              ('Server-side processing',('internal server','object reference','null reference','database','exception','server error')),
+            ]
+            classification=next((label for label,keywords in categories if any(k in detail for k in keywords)),'Unclassified SOAP fault')
+            print('Sanitized fault classification:',classification)
+            print('Fault description withheld to protect credentials and supplier data.')
+            raise SystemExit('SOAP fault returned; no catalog data modified')
+          if os.environ['SS_HTTP_STATUS']!='200':
+            raise SystemExit('Unexpected HTTP status; contents withheld')
           if 'DailyItemUpdateResult' not in names:
             raise SystemExit('Expected result element missing; contents withheld')
           print('SOAP 1.1 request succeeded; no data imported.')

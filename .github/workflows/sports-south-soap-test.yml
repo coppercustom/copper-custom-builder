@@ -570,6 +570,68 @@ jobs:
           print('Update fields:',report['update_field_counts'])
           print('Unchanged existing:',report['unchanged_count'])
           print('Report: ss-import-readiness.json (hashed IDs, counts only)')
+          # Controlled-write implementation is deliberately unreachable until a
+          # separate reviewed workflow change explicitly enables it. It does not
+          # run during workflow_dispatch dry_run.
+          def execute_approved_limited_import(approved_ids, approved_updates):
+            if os.environ.get('IMPORT_MODE')!='limited_import':
+              raise SystemExit('Write path locked: limited_import mode is not enabled')
+            if os.environ.get('ENABLE_SPORTS_SOUTH_WRITES')!='true':
+              raise SystemExit('Write path locked: missing deployment approval gate')
+            if set(approved_ids)!=set(insert_plan):
+              raise SystemExit('Write path locked: approved insert plan has drifted')
+            if set(approved_updates)!=set(item for item,_ in update_plan):
+              raise SystemExit('Write path locked: approved update plan has drifted')
+            if len(approved_ids)>25 or len(approved_updates)>10:
+              raise SystemExit('Write path locked: batch exceeds first-import limits')
+            # Do not use upsert for inserts: a concurrent insertion must fail
+            # rather than silently overwrite a supplier row.
+            def call(method,url,payload):
+              body=json.dumps(payload).encode('utf-8')
+              request=urllib.request.Request(url,data=body,method=method,headers={
+                'apikey':key,'Authorization':'Bearer '+key,
+                'Content-Type':'application/json','Prefer':'return=representation'})
+              with urllib.request.urlopen(request,timeout=30) as response:
+                return json.load(response)
+            def build_row(item):
+              fields=incoming[item]
+              row={'item_no':item,'attributes':{}}
+              for column,source in safe_map.items():
+                row[column]=fields.get(source,'')
+              row['brand_id']=fields.get('IMFGNO','')
+              return row
+            # Single-item writes are followed by exact read-back checks.
+            # If interrupted, rerun only after a fresh plan and approval.
+            verified_inserts=verified_updates=0
+            for item in approved_ids:
+              row=build_row(item)
+              created=call('POST',endpoint,row)
+              if len(created)!=1 or any(str(created[0].get(k) or '')!=str(v or '')
+                                         for k,v in row.items() if k!='attributes'):
+                raise SystemExit('Insert verification failed; stop and inspect database')
+              verified_inserts+=1
+            for item in approved_updates:
+              fields=incoming[item]
+              old=existing[item]
+              changes={column:fields.get(source,'') for column,source in safe_map.items()
+                       if str(old.get(column) or '').strip()!=fields.get(source,'').strip()}
+              if not changes: continue
+              # Optimistic concurrency guard: only modify a row whose original
+              # field values still match the approved snapshot.
+              filters={'item_no':'eq.'+item}
+              for column in changes:
+                original=old.get(column)
+                filters[column]='eq.'+str(original) if original is not None else 'is.null'
+              url=endpoint+'?'+urllib.parse.urlencode(filters)
+              updated=call('PATCH',url,changes)
+              if len(updated)!=1 or any(str(updated[0].get(k) or '')!=str(v or '')
+                                         for k,v in changes.items()):
+                raise SystemExit('Update verification failed; stop and inspect database')
+              if str(updated[0].get('brand_id') or '')!=str(old.get('brand_id') or ''):
+                raise SystemExit('Brand assignment changed unexpectedly; stop')
+              verified_updates+=1
+            print('LIMITED IMPORT VERIFIED inserts:',verified_inserts,
+                  'updates:',verified_updates,'checkpoint writes: 0')
           print('Production mode: LOCKED pending explicit approval and further validation.')
           if len(insert_plan)+sum(held_new.values())!=len(incoming_new):
             raise SystemExit('Import plan reconciliation failed: new records')

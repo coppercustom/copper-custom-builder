@@ -69,6 +69,41 @@ jobs:
           with open('/tmp/ss-action','w') as out: out.write(actions[0])
           print('SOAPAction extracted from WSDL; matches hardcoded previous action:',actions[0]=='https://webservices.theshootingwarehouse.com/smart/inventory.asmx/DailyItemUpdate')
           PY
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          ws='{http://schemas.xmlsoap.org/wsdl/}'
+          xs='{http://www.w3.org/2001/XMLSchema}'
+          soapenv='{http://schemas.xmlsoap.org/soap/envelope/}'
+          definitions=ET.parse('/tmp/ss.wsdl').getroot()
+          schema=next((s for s in definitions.findall('.//'+xs+'schema')
+                       if any(e.get('name')=='DailyItemUpdate' for e in s.findall(xs+'element'))),None)
+          if schema is None: raise SystemExit('WSDL missing DailyItemUpdate schema')
+          ns=schema.get('targetNamespace')
+          qualified=schema.get('elementFormDefault')=='qualified'
+          element=next(e for e in schema.findall(xs+'element') if e.get('name')=='DailyItemUpdate')
+          expected=element.findall('.//'+xs+'sequence/'+xs+'element')
+          root=ET.parse('/tmp/ss-request.xml').getroot()
+          body=root.find(soapenv+'Body')
+          if body is None or len(body)!=1: raise SystemExit('Invalid SOAP body structure')
+          operation=body[0]
+          if operation.tag!='{%s}DailyItemUpdate'%ns: raise SystemExit('Operation namespace mismatch')
+          children=list(operation)
+          if len(children)!=len(expected): raise SystemExit('SOAP parameter count mismatch')
+          for child,definition in zip(children,expected):
+            name=definition.get('name')
+            expected_tag=('{%s}%s'%(ns,name)) if qualified else name
+            if child.tag!=expected_tag: raise SystemExit('SOAP parameter name/namespace/order mismatch at '+name)
+            typ=definition.get('type','')
+            if typ.endswith(':int'):
+              try: int(child.text or '')
+              except ValueError: raise SystemExit('Invalid integer parameter: '+name)
+            elif not typ.endswith(':string'):
+              raise SystemExit('Unrecognized WSDL parameter type: '+name)
+            print('WSDL parameter validated:',name,'type:',typ.split(':')[-1],
+                  'populated:',bool(child.text and child.text.strip()))
+          print('SOAP request matches WSDL parameter order, namespace and declared types.')
+          print('Note: WSDL cannot validate supplier-specific accepted values or account access.')
+          PY
           SOAP_ACTION="$(cat /tmp/ss-action)"
           status="$(curl --silent --show-error --max-time 50 --tlsv1.2 --tls-max 1.2 \
             --ciphers 'ECDHE-RSA-AES128-SHA256' \

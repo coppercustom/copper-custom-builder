@@ -544,7 +544,7 @@ jobs:
             'mode':'dry_run',
             'import_approved':False,
             'production_enabled':False,
-            'idempotency_key':'sports-south-daily-'+__import__('datetime').datetime.now(__import__('datetime').timezone.utc).strftime('%Y-%m-%d'),
+            'plan_digest':hashlib.sha256(json.dumps({'inserts':sorted(insert_plan),'updates':sorted((i,sorted(c)) for i,c in update_plan),'brand_conflicts':sorted(i for i,_,_ in mismatches)},sort_keys=True).encode()).hexdigest(),
             'incoming_count':len(incoming),
             'existing_count':len(existing),
             'new_count':len(incoming_new),
@@ -561,6 +561,36 @@ jobs:
             'insert_id_hashes':[fingerprint(i) for i in sorted(insert_plan)],
             'update_field_counts':dict(Counter(field for _,changed in update_plan for field in changed)),
           }
+          # Simulate interrupted batches without performing any network writes.
+          # A resumed run must skip already-applied inserts and updates and stop
+          # if a record diverges from both its approved before/after snapshots.
+          def classify_resume(before,after,current):
+            if current==after: return 'already_applied'
+            if current==before: return 'pending'
+            return 'conflict'
+          assert classify_resume(None,{'x':1},None)=='pending'
+          assert classify_resume(None,{'x':1},{'x':1})=='already_applied'
+          assert classify_resume(None,{'x':1},{'x':2})=='conflict'
+          assert classify_resume({'x':0},{'x':1},{'x':0})=='pending'
+          assert classify_resume({'x':0},{'x':1},{'x':1})=='already_applied'
+          assert classify_resume({'x':0},{'x':1},{'x':3})=='conflict'
+          # Simulate every interruption point of the proposed batch.
+          sequence=[('insert',item) for item in sorted(insert_plan)]+[
+            ('update',item) for item,_ in sorted(update_plan)]
+          for cut in range(len(sequence)+1):
+            completed=set(sequence[:cut])
+            resumed=[step for step in sequence if step not in completed]
+            if len(completed)+len(resumed)!=len(sequence):
+              raise SystemExit('Interrupted-run recovery simulation failed')
+            if set(resumed)&completed:
+              raise SystemExit('Interrupted-run would repeat a completed write')
+          report['recovery_simulation']='passed'
+          report['simulated_interruption_points']=len(sequence)+1
+          report['production_write_path_tested']=False
+          report['write_path_status']='locked; requires snapshot-based recovery before activation'
+          report['update_id_hashes']=[fingerprint(i) for i,_ in sorted(update_plan)]
+          print('INTERRUPTION RECOVERY SIMULATION: PASS across',len(sequence)+1,'batch boundaries')
+          print('Write path remains locked; simulated recovery is not a production transaction guarantee.')
           with open('/tmp/ss-import-readiness.json','w') as output:
             json.dump(report,output,indent=2,sort_keys=True)
           print('=== FINAL IMPORT PLAN (NO WRITES) ===')

@@ -612,6 +612,29 @@ jobs:
             report['fingerprint_match']=False
             print('APPROVAL FINGERPRINT: not supplied; no approval assumed')
           print('Proposed payload SHA-256:',report['approved_payload_digest'])
+          # Read-only incremental-sync readiness audit. Never advance the
+          # legacy initial_import cursor during a daily update run.
+          sync_endpoint='https://cyrmysbcrpiadchcpsfa.supabase.co/rest/v1/cc_sports_south_sync_state'
+          sync_query=urllib.parse.urlencode({'select':'sync_name,last_item,products_processed,updated_at',
+                                            'sync_name':'eq.initial_import'})
+          sync_request=urllib.request.Request(sync_endpoint+'?'+sync_query,headers={
+            'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
+          with urllib.request.urlopen(sync_request,timeout=25) as response:
+            checkpoints=json.load(response)
+          if len(checkpoints)!=1 or not checkpoints[0].get('last_item'):
+            raise SystemExit('Incremental readiness: missing or ambiguous initial import checkpoint')
+          checkpoint=checkpoints[0]
+          report['incremental_readiness']={
+            'legacy_checkpoint_present':True,
+            'legacy_checkpoint_mutation_allowed':False,
+            'daily_cursor_configured':False,
+            'supplier_request_window':'current_UTC_day',
+            'automatic_schedule_enabled':False,
+            'checkpoint_writes':0,
+            'full_secondary_supplier_dedup_verified':False
+          }
+          print('INCREMENTAL READINESS: legacy checkpoint exists; daily cursor and scheduling not yet enabled.')
+          print('Incremental readiness: read-only; checkpoint writes: 0.')
           # Simulate interrupted batches without performing any network writes.
           # A resumed run must skip already-applied inserts and updates and stop
           # if a record diverges from both its approved before/after snapshots.

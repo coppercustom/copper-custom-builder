@@ -268,6 +268,7 @@ jobs:
           fi
           python3 - <<'PY'
           import os,json,urllib.request,urllib.parse,xml.etree.ElementTree as ET
+          from collections import Counter
           root=ET.parse('/tmp/ss-response.xml').getroot()
           result=next((e for e in root.iter() if e.tag.split('}')[-1]=='DailyItemUpdateResult'),None)
           if result is None or not (result.text or '').strip(): raise SystemExit('Missing supplier result')

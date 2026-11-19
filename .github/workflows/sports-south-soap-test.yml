@@ -286,28 +286,49 @@ jobs:
           ids=list(incoming)
           for start in range(0,len(ids),50):
             batch=ids[start:start+50]
-            query=urllib.parse.urlencode({'select':'item_no,description,short_description',
-              'item_no':'in.('+','.join('"'+x.replace('\\','\\\\').replace('"','\\"')+'"' for x in batch)+')'})
+            query=urllib.parse.urlencode({'select':'item_no,description,short_description,manufacturer_item_no,model,upc,brand_id,category_id,image_ref,attributes',
+              'item_no':'in.('+','.join('"'+x.replace('\\\\','\\\\\\\\').replace('"','\\\\"')+'"' for x in batch)+')'})
             request=urllib.request.Request(endpoint+'?'+query,headers={
               'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
             with urllib.request.urlopen(request,timeout=25) as response:
               records=json.load(response)
             for record in records: existing[str(record['item_no'])]=record
-          inserts=changed=unchanged=0
+          # Only mappings verified from the supplier schema and existing staging column names.
+          # Do not guess UPC, brand, model, image, or attributes from unrelated SOAP fields.
+          mappings={'description':'IDESC','short_description':'SHDESC',
+                    'manufacturer_item_no':'IMFGNO','category_id':'CATCD'}
+          changes={column:0 for column in mappings}
+          changed_rows=unchanged=inserts=0
           for item,fields in incoming.items():
             row=existing.get(item)
-            if row is None: inserts+=1; continue
-            if ((row.get('description') or '').strip()!=fields.get('IDESC','') or
-                (row.get('short_description') or '').strip()!=fields.get('SHDESC','')):
-              changed+=1
+            if row is None:
+              inserts+=1
+              continue
+            any_change=False
+            for column,source_field in mappings.items():
+              if source_field not in fields:
+                raise SystemExit('Required supplier field missing: '+source_field)
+              before=str(row.get(column) or '').strip()
+              after=fields[source_field]
+              if before!=after:
+                changes[column]+=1
+                any_change=True
+            if any_change: changed_rows+=1
             else: unchanged+=1
-          print('SUPABASE READ-ONLY COMPARISON')
+          from collections import Counter
+          coverage=Counter()
+          for fields in incoming.values(): coverage.update(fields.keys())
+          print('SUPABASE READ-ONLY EXTENDED COMPARISON')
           print('Incoming records:',len(incoming))
           print('Existing ITEMNO matches:',len(existing))
           print('New ITEMNO:',inserts)
-          print('Description changes (candidate updates):',changed)
-          print('Description unchanged:',unchanged)
-          print('Other field changes: not yet compared')
+          print('Existing records with one or more mapped-field differences:',changed_rows)
+          print('Existing records unchanged across mapped fields:',unchanged)
+          for column,source_field in mappings.items():
+            print('Field changes %s (%s): %d'%(column,source_field,changes[column]))
+          print('Supplier field coverage:',{field:coverage[field] for field in sorted(coverage)})
+          print('Not compared (mapping unverified): model, upc, brand_id, image_ref, attributes')
+          print('Supplier pricing fields excluded; no pricing values logged or imported.')
           print('Database writes: 0; sync checkpoints changed: 0')
           PY
       - name: Remove temporary supplier data

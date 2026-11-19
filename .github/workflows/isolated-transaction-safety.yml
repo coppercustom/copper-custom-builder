@@ -1,0 +1,96 @@
+name: Isolated transaction and checkpoint safety tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/isolated-transaction-safety.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  transaction-safety:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Exercise isolated SQLite transactions (no network or credentials)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sqlite3, tempfile, os, json, hashlib
+          fd,path=tempfile.mkstemp(prefix='isolated-checkpoint-',suffix='.db')
+          os.close(fd)
+          results={}
+          def connect():
+            c=sqlite3.connect(path,timeout=0.1,isolation_level=None)
+            c.execute('PRAGMA busy_timeout=100')
+            return c
+          def digest(rows):
+            return hashlib.sha256(json.dumps(rows,sort_keys=True).encode()).hexdigest()
+          def apply(c,window,rows,fail=False):
+            d=digest(rows)
+            c.execute('BEGIN IMMEDIATE')
+            try:
+              existing=c.execute('SELECT digest FROM checkpoints WHERE window=?',(window,)).fetchone()
+              if existing:
+                if existing[0]!=d: raise ValueError('digest conflict')
+                c.execute('COMMIT')
+                return 'replay'
+              for key,value in rows:
+                c.execute('INSERT INTO items(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v',(key,value))
+                if fail: raise RuntimeError('injected failure')
+              c.execute('INSERT INTO checkpoints(window,digest) VALUES(?,?)',(window,d))
+              c.execute('COMMIT')
+              return 'committed'
+            except:
+              c.execute('ROLLBACK')
+              raise
+          try:
+            c=connect()
+            c.executescript('CREATE TABLE items(k TEXT PRIMARY KEY,v TEXT NOT NULL); CREATE TABLE checkpoints(window TEXT PRIMARY KEY,digest TEXT NOT NULL);')
+            try:apply(c,'w1',[('a','1')],fail=True)
+            except RuntimeError:pass
+            results['atomic_rollback']=c.execute('SELECT COUNT(*) FROM items').fetchone()[0]==0 and c.execute('SELECT COUNT(*) FROM checkpoints').fetchone()[0]==0
+            results['successful_commit']=apply(c,'w1',[('a','1')])=='committed'
+            results['durable_checkpoint']=connect().execute('SELECT COUNT(*) FROM checkpoints WHERE window=?',('w1',)).fetchone()[0]==1
+            results['idempotent_replay']=apply(c,'w1',[('a','1')])=='replay' and c.execute('SELECT COUNT(*) FROM items').fetchone()[0]==1
+            try:apply(c,'w1',[('a','different')])
+            except ValueError:pass
+            results['digest_conflict_rejected']=c.execute('SELECT v FROM items WHERE k=?',('a',)).fetchone()[0]=='1'
+            competing=connect()
+            c.execute('BEGIN IMMEDIATE')
+            try:
+              try:competing.execute('BEGIN IMMEDIATE')
+              except sqlite3.OperationalError:results['concurrent_writer_blocked']=True
+              else:
+                results['concurrent_writer_blocked']=False
+                competing.execute('ROLLBACK')
+            finally:
+              c.execute('ROLLBACK')
+              competing.close()
+            results['lost_ack_replay']=apply(connect(),'w1',[('a','1')])=='replay'
+            c.close()
+          finally:
+            try:os.unlink(path)
+            except FileNotFoundError:pass
+          report={'scope':'isolated SQLite database only; no supplier access or production guarantees',
+                  'checks':results,'passed':sum(results.values()),'total':len(results),
+                  'production_database_tested':False,'production_writes':0}
+          with open('transaction-safety-report.json','w') as f:json.dump(report,f,indent=2,sort_keys=True)
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+            f.write('## Isolated transaction safety\n\n')
+            for name,ok in results.items():f.write('- '+('PASS' if ok else 'FAIL')+': '+name+'\n')
+            f.write('\nSQLite-only test. Does not validate Supabase/PostgreSQL production transactions.\n')
+          if not all(results.values()):raise SystemExit('Isolated transaction safety tests failed')
+          print('PASS:',len(results),'isolated tests; production writes: 0')
+          PY
+      - name: Upload isolated test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-transaction-safety
+          path: transaction-safety-report.json
+          if-no-files-found: ignore
+          retention-days: 7

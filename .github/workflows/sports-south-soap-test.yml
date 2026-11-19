@@ -1105,7 +1105,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sports-south-consolidated-audit
-          path: /tmp/ss-audit-summary.json /tmp/ss-fault-injection.json
+          path: /tmp/ss-audit-summary.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload sanitized import-readiness report

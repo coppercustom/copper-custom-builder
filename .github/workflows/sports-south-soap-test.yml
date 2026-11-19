@@ -630,38 +630,72 @@ jobs:
                 row[column]=fields.get(source,'')
               row['brand_id']=fields.get('IMFGNO','')
               return row
-            # Single-item writes are followed by exact read-back checks.
-            # If interrupted, rerun only after a fresh plan and approval.
-            verified_inserts=verified_updates=0
-            for item in approved_ids:
+            # On retry, check each current row before any write. A row that
+            # already equals its approved target is skipped; any unexpected
+            # third state stops the batch instead of overwriting it.
+            def current_row(item):
+              query=urllib.parse.urlencode({'select':'item_no,description,short_description,manufacturer_item_no,model,upc,brand_id,category_id,image_ref,attributes',
+                'item_no':'eq.'+item})
+              request=urllib.request.Request(endpoint+'?'+query,headers={
+                'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
+              with urllib.request.urlopen(request,timeout=25) as response:
+                records=json.load(response)
+              if len(records)>1: raise SystemExit('Duplicate ITEMNO in readback')
+              return records[0] if records else None
+            def equal_fields(actual,target,keys):
+              return actual is not None and all(
+                str(actual.get(column) or '').strip()==str(target.get(column) or '').strip()
+                for column in keys)
+            verified_inserts=verified_updates=skipped=0
+            for item in sorted(approved_ids):
               row=build_row(item)
-              created=call('POST',endpoint,row)
-              if len(created)!=1 or any(str(created[0].get(k) or '')!=str(v or '')
-                                         for k,v in row.items() if k!='attributes'):
-                raise SystemExit('Insert verification failed; stop and inspect database')
+              current=current_row(item)
+              if current is not None:
+                if equal_fields(current,row,list(safe_map)+['item_no','brand_id']) and current.get('attributes')=={}:
+                  skipped+=1
+                  continue
+                raise SystemExit('Insert collision differs from approved target; stop')
+              try:
+                call('POST',endpoint,row)
+              except Exception:
+                # Ambiguous network failure: inspect current state before stopping.
+                if not equal_fields(current_row(item),row,list(safe_map)+['item_no','brand_id']):
+                  raise
+              verified=current_row(item)
+              if not equal_fields(verified,row,list(safe_map)+['item_no','brand_id']) or verified.get('attributes')!={}:
+                raise SystemExit('Insert readback mismatch; stop')
               verified_inserts+=1
-            for item in approved_updates:
+            for item in sorted(approved_updates):
               fields=incoming[item]
               old=existing[item]
               changes={column:fields.get(source,'') for column,source in safe_map.items()
                        if str(old.get(column) or '').strip()!=fields.get(source,'').strip()}
               if not changes: continue
-              # Optimistic concurrency guard: only modify a row whose original
-              # field values still match the approved snapshot.
+              current=current_row(item)
+              if current is None: raise SystemExit('Update target missing; stop')
+              if equal_fields(current,changes,list(changes)):
+                skipped+=1
+                continue
+              if not equal_fields(current,old,list(safe_map)+['brand_id']):
+                raise SystemExit('Update target drifted from approved snapshot; stop')
+              # CAS filters prevent writing if another process changes the row.
               filters={'item_no':'eq.'+item}
               for column in changes:
                 original=old.get(column)
                 filters[column]='eq.'+str(original) if original is not None else 'is.null'
               url=endpoint+'?'+urllib.parse.urlencode(filters)
-              updated=call('PATCH',url,changes)
-              if len(updated)!=1 or any(str(updated[0].get(k) or '')!=str(v or '')
-                                         for k,v in changes.items()):
-                raise SystemExit('Update verification failed; stop and inspect database')
-              if str(updated[0].get('brand_id') or '')!=str(old.get('brand_id') or ''):
-                raise SystemExit('Brand assignment changed unexpectedly; stop')
+              try:
+                updated=call('PATCH',url,changes)
+                if len(updated)!=1: raise SystemExit('Concurrent update conflict; stop')
+              except Exception:
+                if not equal_fields(current_row(item),changes,list(changes)):
+                  raise
+              verified=current_row(item)
+              if not equal_fields(verified,changes,list(changes)) or str(verified.get('brand_id') or '')!=str(old.get('brand_id') or ''):
+                raise SystemExit('Update readback mismatch or brand drift; stop')
               verified_updates+=1
             print('LIMITED IMPORT VERIFIED inserts:',verified_inserts,
-                  'updates:',verified_updates,'checkpoint writes: 0')
+                  'updates:',verified_updates,'already-applied:',skipped,'checkpoint writes: 0')
           print('Production mode: LOCKED pending explicit approval and further validation.')
           if len(insert_plan)+sum(held_new.values())!=len(incoming_new):
             raise SystemExit('Import plan reconciliation failed: new records')

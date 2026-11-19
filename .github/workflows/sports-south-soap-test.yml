@@ -9,14 +9,15 @@ on:
         options:
           - dry_run
         default: dry_run
-      confirmation_phrase:
-        description: 'For limited_import only: AUTHORIZE LIMITED SPORTS SOUTH IMPORT'
-        type: string
-        required: false
-      expected_plan_digest:
-        description: 'Required for limited_import: exact approved SHA-256 payload digest'
-        type: string
-        required: false
+      overlap_days:
+        description: 'Read-only SOAP lookback (0-3 days); no cursor advancement'
+        type: choice
+        options:
+          - '0'
+          - '1'
+          - '2'
+          - '3'
+        default: '0'
 
 permissions:
   contents: read
@@ -38,6 +39,8 @@ jobs:
             test -n "${!name}" || { echo "::error::Missing $name"; exit 1; }
           done
       - name: Request DailyItemUpdate over SOAP 1.1
+        env:
+          OVERLAP_DAYS: ${{ inputs.overlap_days }}
         shell: bash
         run: |
           set -euo pipefail
@@ -57,11 +60,15 @@ jobs:
           qualified=schema.get('elementFormDefault')=='qualified'
           element=next(e for e in schema.findall(xs+'element') if e.get('name')=='DailyItemUpdate')
           definitions=element.findall('.//'+xs+'sequence/'+xs+'element')
+          lookback=int(os.environ.get('OVERLAP_DAYS') or '0')
+          if lookback not in (0,1,2,3): raise SystemExit('Unsupported lookback')
+          request_day=datetime.datetime.now(datetime.timezone.utc).date()-datetime.timedelta(days=lookback)
+          print('SOAP read-only lookback days:',lookback)
           values={
             'CustomerNumber':os.environ['SS_CUSTOMER'],
             'UserName':os.environ['SS_USERNAME'],
             'Password':os.environ['SS_PASSWORD'],
-            'LastUpdate':datetime.datetime.now(datetime.timezone.utc).strftime('%m/%d/%Y'),
+            'LastUpdate':request_day.strftime('%m/%d/%Y'),
             'LastItem':'0',
             'Source':''
           }
@@ -275,6 +282,7 @@ jobs:
         shell: bash
         env:
           IMPORT_MODE: ${{ inputs.mode }}
+          OVERLAP_DAYS: ${{ inputs.overlap_days }}
           EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
           CONFIRMATION_PHRASE: ${{ inputs.confirmation_phrase }}
           ENABLE_SPORTS_SOUTH_WRITES: 'false'
@@ -655,7 +663,10 @@ jobs:
           report['incremental_readiness']['daily_cursor_configured']=True
           report['incremental_readiness']['daily_cursor_initialized']=bool(cursor_value)
           report['incremental_readiness']['daily_cursor_writes']=0
-          report['incremental_readiness']['safe_window_strategy']='overlap and recheck, pending implementation'
+          report['incremental_readiness']['requested_lookback_days']=int(os.environ.get('OVERLAP_DAYS') or '0')
+          report['incremental_readiness']['overlap_window_applied_to_soap']=True
+          report['incremental_readiness']['cursor_driven_window_applied']=False
+          report['incremental_readiness']['safe_window_strategy']='operator-selected UTC date lookback; cursor-driven scheduling pending'
           report['incremental_readiness']['automatic_schedule_enabled']=False
           print('DAILY CURSOR: PASS; initialized:',bool(cursor_value),'; no writes.')
           # Simulate interrupted batches without performing any network writes.

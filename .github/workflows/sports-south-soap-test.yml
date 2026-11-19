@@ -459,6 +459,49 @@ jobs:
           print('Brand reassignment conflicts held for review:',len(mismatches))
           print('Unified cross-supplier deduplication: NOT validated by this staging-only test.')
           print('Attributes mapping: NOT validated; not included in proposed writes.')
+          # Cross-supplier match screening against the unified firearms view.
+          # Matches are review flags, not proof of duplicate identity.
+          unified_endpoint='https://cyrmysbcrpiadchcpsfa.supabase.co/rest/v1/cc_unified_firearms_v2'
+          new_mpn=sorted(set(v.get('MFGINO','').strip() for v in incoming_new.values())-{''})
+          match_upcs=set()
+          match_mpns=set()
+          source_hits=Counter()
+          for column,values,found in (('upc',new_upcs,match_upcs),
+                                      ('manufacturer_part_number',new_mpn,match_mpns)):
+            for start in range(0,len(values),30):
+              batch=values[start:start+30]
+              # URL-encode individual values and use PostgREST quoted in-list syntax.
+              quoted=','.join('"'+v.replace('\\','\\\\').replace('"','\\"')+'"' for v in batch)
+              query=urllib.parse.urlencode({'select':'source,'+column,
+                                             column:'in.('+quoted+')'})
+              request=urllib.request.Request(unified_endpoint+'?'+query,headers={
+                'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
+              with urllib.request.urlopen(request,timeout=25) as response:
+                for record in json.load(response):
+                  if record.get('source')!='sports_south':
+                    found.add(str(record.get(column) or '').strip())
+                    source_hits[str(record.get('source') or 'unknown')]+=1
+          cross_upc=sum(v.get('ITUPC','').strip() in match_upcs for v in incoming_new.values())
+          cross_mpn=sum(v.get('MFGINO','').strip() in match_mpns for v in incoming_new.values())
+          cross_either=sum(v.get('ITUPC','').strip() in match_upcs or
+                           v.get('MFGINO','').strip() in match_mpns for v in incoming_new.values())
+          # Preserve attributes until an explicitly verified source-field mapping exists.
+          populated_attributes=sum(bool(row.get('attributes')) for row in existing.values())
+          attribute_candidates=Counter()
+          for fields in incoming.values():
+            for field in fields:
+              if field.startswith('ITATR'):
+                attribute_candidates[field]+=bool(fields[field])
+          print('=== CROSS-SUPPLIER AND ATTRIBUTES READINESS ===')
+          print('New products matching other unified source by UPC:',cross_upc)
+          print('New products matching other unified source by manufacturer part number:',cross_mpn)
+          print('New products matching either identifier:',cross_either)
+          print('Cross-supplier candidate hits by primary source:',dict(source_hits))
+          print('Note: unified view may omit secondary supplier listings; this is a screening, not an exhaustive deduplication proof.')
+          print('Existing matched staging records with nonempty attributes JSON:',populated_attributes)
+          print('Supplier attribute field nonempty counts:',dict(sorted(attribute_candidates.items())))
+          print('Attributes action: preserve existing JSON; do not map or overwrite yet.')
+          print('Potential cross-supplier matches require manufacturer and product-class verification.')
           print('Decision: DRY RUN ONLY. No inserts, updates, checkpoint changes or supplier pricing.')
           print('No raw supplier values, customer identifiers, or credentials printed.')
           print('Database writes: 0; sync checkpoints changed: 0')

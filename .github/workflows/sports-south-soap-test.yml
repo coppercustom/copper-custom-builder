@@ -285,6 +285,84 @@ jobs:
           print('DRY RUN - database writes: 0; sync checkpoint changes: 0.')
           print('SOAP 1.1 request succeeded; response structure inspected; no data imported.')
           PY
+      - name: Fetch bounded complete SOAP delta (read-only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,subprocess,xml.etree.ElementTree as ET,json
+          first_path='/tmp/ss-response.xml'
+          request_path='/tmp/ss-request.xml'
+          action=open('/tmp/ss-action').read().strip()
+          def parse(path):
+            root=ET.parse(path).getroot()
+            if any(e.tag.split('}')[-1]=='Fault' for e in root.iter()):
+              raise SystemExit('SOAP fault during pagination; response withheld')
+            results=[e for e in root.iter() if e.tag.split('}')[-1]=='DailyItemUpdateResult']
+            if len(results)!=1 or not (results[0].text or '').strip():
+              raise SystemExit('Missing or ambiguous SOAP result during pagination')
+            dataset=ET.fromstring(results[0].text)
+            rows=[r for r in dataset if r.tag.split('}')[-1]=='Table']
+            ids=[]
+            for row in rows:
+              fields=[(c.text or '').strip() for c in row if c.tag.split('}')[-1].upper()=='ITEMNO']
+              if len(fields)!=1 or not fields[0].isdecimal(): raise SystemExit('Invalid numeric ITEMNO in supplier page')
+              ids.append(fields[0])
+            if len(ids)!=len(set(ids)): raise SystemExit('Duplicate ITEMNO within supplier page')
+            return root,results[0],dataset,rows,ids
+          root,result,data,rows,ids=parse(first_path)
+          if not ids: raise SystemExit('Empty initial supplier page')
+          seen=set(ids)
+          all_rows=list(rows)
+          page_counts=[len(ids)]
+          previous_cursor=-1
+          # Max 10 pages / 10,000 rows, 50s per request. Stop on partial
+          # page; a full tenth page is inconclusive and fails closed.
+          for page in range(2,11):
+            if page_counts[-1]<1000: break
+            cursor=max(map(int,ids))
+            if cursor<=previous_cursor: raise SystemExit('Nonadvancing supplier cursor')
+            previous_cursor=cursor
+            req=ET.parse(request_path)
+            matches=[e for e in req.getroot().iter() if e.tag.split('}')[-1]=='LastItem']
+            if len(matches)!=1: raise SystemExit('Ambiguous LastItem parameter')
+            matches[0].text=str(cursor)
+            next_request='/tmp/ss-page-request.xml'
+            next_response='/tmp/ss-page-response.xml'
+            req.write(next_request,encoding='utf-8',xml_declaration=True)
+            cmd=['curl','--fail','--silent','--show-error','--max-time','50',
+                 '--tlsv1.2','--tls-max','1.2','--ciphers','ECDHE-RSA-AES128-SHA256',
+                 '--header','Content-Type: text/xml; charset=utf-8',
+                 '--header','SOAPAction: "'+action+'"','--data-binary','@'+next_request,
+                 '--output',next_response,
+                 'https://webservices.theshootingwarehouse.com/smart/inventory.asmx']
+            subprocess.run(cmd,check=True,timeout=60)
+            _,_,_,new_rows,new_ids=parse(next_response)
+            if set(new_ids)&seen: raise SystemExit('Overlapping supplier pages; refusing incomplete audit')
+            if new_ids and min(map(int,new_ids))<=cursor:
+              raise SystemExit('Supplier page is not strictly beyond LastItem cursor')
+            seen.update(new_ids)
+            all_rows.extend(new_rows)
+            page_counts.append(len(new_ids))
+            ids=new_ids
+            print('SOAP pagination page:',page,'rows:',len(new_ids),'total:',len(seen))
+            if not new_ids: break
+          if page_counts[-1]>=1000:
+            raise SystemExit('Pagination safety cap reached with full page; dataset completeness unverified')
+          # Replace the initial SOAP result in memory with the complete,
+          # validated dataset. Existing Supabase reconciliation then runs once.
+          for row in all_rows[len(rows):]:
+            data.append(row)
+          result.text=ET.tostring(data,encoding='unicode')
+          ET.ElementTree(root).write(first_path,encoding='utf-8',xml_declaration=True)
+          summary={'pages':len(page_counts),'page_counts':page_counts,
+                   'total_unique':len(seen),'last_page_partial':True,
+                   'bounded_pagination_passed':True,
+                   'supplier_contract_confirmed':False}
+          with open('/tmp/ss-pagination-summary.json','w') as out: json.dump(summary,out)
+          print('SOAP PAGINATION: PASS; page counts:',page_counts,'unique records:',len(seen))
+          print('SOAP PAGINATION: read-only; supplier contract still unconfirmed; no writes.')
+          PY
       - name: Compare supplier records with Supabase (read only)
         shell: bash
         env:
@@ -315,7 +393,7 @@ jobs:
             if not item or item in incoming: raise SystemExit('Invalid or duplicate ITEMNO')
             incoming[item]=fields
           if not incoming: raise SystemExit('No incoming rows')
-          # Exactly 1000 rows was observed in the expanded window. Until
+          # Pagination audit runs before reconciliation; full combined response is expected.\n          # Exactly 1000 rows was observed in the expanded window. Until
           # continuation semantics are verified against the supplier WSDL,
           # treat this as a possible truncated page, not a complete delta.
           response_at_possible_cap=(len(incoming)>=1000)
@@ -612,13 +690,13 @@ jobs:
           # ID hashes allow comparing reruns without leaking supplier records.
           import hashlib
           fingerprint=lambda item: hashlib.sha256(item.encode()).hexdigest()[:12]
-          report={
+          pagination=json.load(open('/tmp/ss-pagination-summary.json'))\n          report={
             'mode':mode,
             'import_approved':False,
             'production_enabled':False,
             'plan_digest':hashlib.sha256(json.dumps({'inserts':sorted(insert_plan),'updates':sorted((i,sorted(c)) for i,c in update_plan),'brand_conflicts':sorted(i for i,_,_ in mismatches)},sort_keys=True).encode()).hexdigest(),
             'incoming_count':len(incoming),
-            'possible_supplier_page_cap':response_at_possible_cap,
+            'possible_supplier_page_cap':response_at_possible_cap,\n            'pagination_audit':pagination,
             'supplier_pagination_verified':False,
             'cursor_advancement_permitted':False,
             'existing_count':len(existing),
@@ -718,7 +796,7 @@ jobs:
           report['incremental_readiness']['safe_window_strategy']='operator-selected UTC date lookback; cursor-driven scheduling pending'
           report['incremental_readiness']['automatic_schedule_enabled']=False
           print('DAILY CURSOR: PASS; initialized:',bool(cursor_value),'; no writes.')
-          report['incremental_readiness']['supplier_response_completeness_verified']=False
+          report['incremental_readiness']['bounded_pagination_passed']=pagination['bounded_pagination_passed']\n          report['incremental_readiness']['supplier_response_completeness_verified']=False
           report['incremental_readiness']['cursor_advancement_blocked_by_completeness']=True
           report['incremental_readiness']['cursor_window_selection_ready']=bool(cursor_value) and not response_at_possible_cap
           print('INCREMENTAL GATE: BLOCKED pending verified supplier continuation; possible 1000-row cap:',response_at_possible_cap)
@@ -898,71 +976,6 @@ jobs:
           print('No raw supplier values, customer identifiers, or credentials printed.')
           print('Sync checkpoints changed: 0; write counts shown in verified import output when applicable.')
           PY
-      - name: Probe LastItem continuation (read-only, one bounded request)
-        if: ${{ inputs.overlap_days == '2' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          root=ET.parse('/tmp/ss-response.xml').getroot()
-          result=next((e for e in root.iter() if e.tag.split('}')[-1]=='DailyItemUpdateResult'),None)
-          if result is None or not (result.text or '').strip(): raise SystemExit('Continuation probe: missing initial result')
-          dataset=ET.fromstring(result.text)
-          ids=[(c.text or '').strip() for row in dataset if row.tag.split('}')[-1]=='Table'
-               for c in row if c.tag.split('}')[-1].upper()=='ITEMNO']
-          if len(ids)<1000:
-            print('CONTINUATION PROBE: skipped; initial page below observed 1000-record boundary.')
-            raise SystemExit(0)
-          if len(ids)!=len(set(ids)) or not ids or not all(x.isdecimal() for x in ids):
-            raise SystemExit('Continuation probe: IDs not unique numeric values; refusing cursor guess')
-          # Probe only the largest numeric ITEMNO. Do not claim completeness
-          # without a supplier-confirmed ordering/continuation contract.
-          cursor=str(max(map(int,ids)))
-          request=ET.parse('/tmp/ss-request.xml')
-          matches=[e for e in request.getroot().iter() if e.tag.split('}')[-1]=='LastItem']
-          if len(matches)!=1: raise SystemExit('Continuation probe: ambiguous LastItem')
-          matches[0].text=cursor
-          request.write('/tmp/ss-continuation-request.xml',encoding='utf-8',xml_declaration=True)
-          print('CONTINUATION PROBE: initial count:',len(ids),'numeric IDs:',len(set(ids)))
-          print('CONTINUATION PROBE: candidate cursor selected; cursor value withheld.')
-          PY
-          if [ ! -f /tmp/ss-continuation-request.xml ]; then exit 0; fi
-          SOAP_ACTION="$(cat /tmp/ss-action)"
-          status="$(curl --silent --show-error --max-time 50 --tlsv1.2 --tls-max 1.2 \
-            --ciphers 'ECDHE-RSA-AES128-SHA256' \
-            --header 'Content-Type: text/xml; charset=utf-8' \
-            --header "SOAPAction: \"$SOAP_ACTION\"" \
-            --data-binary @/tmp/ss-continuation-request.xml \
-            --output /tmp/ss-continuation-response.xml --write-out '%{http_code}' \
-            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx')"
-          echo "Continuation HTTP status: $status"
-          SS_CONTINUATION_STATUS="$status" python3 - <<'PY'
-          import os,xml.etree.ElementTree as ET
-          if os.environ['SS_CONTINUATION_STATUS']!='200': raise SystemExit('Continuation HTTP error; body withheld')
-          def ids_from(path):
-            root=ET.parse(path).getroot()
-            if any(e.tag.split('}')[-1]=='Fault' for e in root.iter()):
-              raise SystemExit('Continuation SOAP fault; body withheld')
-            result=next((e for e in root.iter() if e.tag.split('}')[-1]=='DailyItemUpdateResult'),None)
-            if result is None: raise SystemExit('Continuation result missing')
-            data=ET.fromstring(result.text or '<NewDataSet/>')
-            ids=[(c.text or '').strip() for row in data if row.tag.split('}')[-1]=='Table'
-                 for c in row if c.tag.split('}')[-1].upper()=='ITEMNO']
-            if len(ids)!=len(set(ids)): raise SystemExit('Continuation duplicate IDs within page')
-            return ids
-          first=ids_from('/tmp/ss-response.xml')
-          second=ids_from('/tmp/ss-continuation-response.xml')
-          overlap=len(set(first)&set(second))
-          cursor=int(max(first,key=lambda x:int(x)))
-          higher=sum(x.isdecimal() and int(x)>cursor for x in second)
-          print('CONTINUATION PROBE: second page records:',len(second))
-          print('CONTINUATION PROBE: overlapping ITEMNO count:',overlap)
-          print('CONTINUATION PROBE: ITEMNO greater than candidate cursor:',higher)
-          print('CONTINUATION PROBE: nonadvancing:',bool(second) and higher==0)
-          print('CONTINUATION PROBE: read-only; completeness and pagination semantics remain UNVERIFIED.')
-          print('CONTINUATION PROBE: no product or checkpoint writes.')
-          PY
       - name: Upload sanitized import-readiness report
         if: always()
         uses: actions/upload-artifact@v4
@@ -974,4 +987,4 @@ jobs:
       - name: Remove temporary supplier data
         if: always()
         shell: bash
-        run: rm -f /tmp/ss-request.xml /tmp/ss-response.xml /tmp/ss-continuation-request.xml /tmp/ss-continuation-response.xml /tmp/ss.wsdl /tmp/ss-action /tmp/ss-import-readiness.json
+        run: rm -f /tmp/ss-pagination-summary.json /tmp/ss-page-request.xml /tmp/ss-page-response.xml /tmp/ss-request.xml /tmp/ss-response.xml /tmp/ss-continuation-request.xml /tmp/ss-continuation-response.xml /tmp/ss.wsdl /tmp/ss-action /tmp/ss-import-readiness.json

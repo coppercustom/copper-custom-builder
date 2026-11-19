@@ -513,6 +513,34 @@ jobs:
           cross_mpn=sum(v.get('MFGINO','').strip() in match_mpns for v in incoming_new.values())
           cross_either=sum(v.get('ITUPC','').strip() in match_upcs or
                            v.get('MFGINO','').strip() in match_mpns for v in incoming_new.values())
+          # Secondary supplier-link audit. These tables are not represented
+          # completely by the unified view; count matches by source ID only.
+          # This is a linkage check, NOT proof of cross-source product identity.
+          source_link_count=0
+          source_link_endpoint='https://cyrmysbcrpiadchcpsfa.supabase.co/rest/v1/cc_catalog_sources'
+          for start in range(0,len(incoming_new),40):
+            batch=list(incoming_new)[start:start+40]
+            quoted=','.join('"'+v.replace('\\','\\\\').replace('"','\\"')+'"' for v in batch)
+            query=urllib.parse.urlencode({'select':'source_id',
+              'source':'eq.sports_south','source_id':'in.('+quoted+')'})
+            request=urllib.request.Request(source_link_endpoint+'?'+query,headers={
+              'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
+            with urllib.request.urlopen(request,timeout=25) as response:
+              source_link_count+=len(json.load(response))
+          supplier_link_count=0
+          supplier_link_endpoint='https://cyrmysbcrpiadchcpsfa.supabase.co/rest/v1/cc_supplier_listing_links'
+          for start in range(0,len(incoming_new),40):
+            batch=list(incoming_new)[start:start+40]
+            quoted=','.join('"'+v.replace('\\','\\\\').replace('"','\\"')+'"' for v in batch)
+            query=urllib.parse.urlencode({'select':'supplier_product_id',
+              'supplier':'eq.sports_south','supplier_product_id':'in.('+quoted+')'})
+            request=urllib.request.Request(supplier_link_endpoint+'?'+query,headers={
+              'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
+            with urllib.request.urlopen(request,timeout=25) as response:
+              supplier_link_count+=len(json.load(response))
+          print('SECONDARY LISTING AUDIT: catalog source links:',source_link_count,
+                'supplier listing links:',supplier_link_count)
+          print('Secondary listing audit checks source IDs only; full cross-supplier dedup remains pending.')
           # Preserve attributes until an explicitly verified source-field mapping exists.
           populated_attributes=sum(bool(row.get('attributes')) for row in existing.values())
           attribute_candidates=Counter()
@@ -582,6 +610,8 @@ jobs:
             'unchanged_count':len(existing)-len(update_plan),
             'brand_conflict_count':len(mismatches),
             'cross_supplier_candidate_count':cross_either,
+            'existing_catalog_source_link_count':source_link_count,
+            'existing_supplier_listing_link_count':supplier_link_count,
             'attribute_action':'preserve_existing',
             'supplier_pricing':'excluded',
             'database_writes':0,

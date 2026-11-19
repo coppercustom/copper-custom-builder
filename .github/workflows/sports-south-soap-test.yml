@@ -40,7 +40,7 @@ jobs:
             'UserName':os.environ['SS_USERNAME'],
             'Password':os.environ['SS_PASSWORD'],
             'LastUpdate':datetime.datetime.now(datetime.timezone.utc).strftime('%m/%d/%Y'),
-            'LastItem':'',
+            'LastItem':'0',
             'Source':''
           }
           for name,value in fields.items():

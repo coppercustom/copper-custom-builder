@@ -690,7 +690,8 @@ jobs:
           # ID hashes allow comparing reruns without leaking supplier records.
           import hashlib
           fingerprint=lambda item: hashlib.sha256(item.encode()).hexdigest()[:12]
-          pagination=json.load(open('/tmp/ss-pagination-summary.json'))\n          report={
+          pagination=json.load(open('/tmp/ss-pagination-summary.json'))
+          report={
             'mode':mode,
             'import_approved':False,
             'production_enabled':False,

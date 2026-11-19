@@ -798,7 +798,8 @@ jobs:
           report['incremental_readiness']['safe_window_strategy']='operator-selected UTC date lookback; cursor-driven scheduling pending'
           report['incremental_readiness']['automatic_schedule_enabled']=False
           print('DAILY CURSOR: PASS; initialized:',bool(cursor_value),'; no writes.')
-          report['incremental_readiness']['bounded_pagination_passed']=pagination['bounded_pagination_passed']\n          report['incremental_readiness']['supplier_response_completeness_verified']=False
+          report['incremental_readiness']['bounded_pagination_passed']=pagination['bounded_pagination_passed']
+          report['incremental_readiness']['supplier_response_completeness_verified']=False
           report['incremental_readiness']['cursor_advancement_blocked_by_completeness']=True
           report['incremental_readiness']['cursor_window_selection_ready']=bool(cursor_value) and not response_at_possible_cap
           print('INCREMENTAL GATE: BLOCKED pending verified supplier continuation; possible 1000-row cap:',response_at_possible_cap)

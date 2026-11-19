@@ -4,11 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Dry run or manually approved, fingerprint-pinned limited import'
+        description: 'Read-only supplier audit (production import retired)'
         type: choice
         options:
           - dry_run
-          - limited_import
         default: dry_run
       confirmation_phrase:
         description: 'For limited_import only: AUTHORIZE LIMITED SPORTS SOUTH IMPORT'
@@ -278,7 +277,7 @@ jobs:
           IMPORT_MODE: ${{ inputs.mode }}
           EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
           CONFIRMATION_PHRASE: ${{ inputs.confirmation_phrase }}
-          ENABLE_SPORTS_SOUTH_WRITES: 'true'
+          ENABLE_SPORTS_SOUTH_WRITES: 'false'
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
@@ -528,10 +527,10 @@ jobs:
           if os.environ.get('GITHUB_EVENT_NAME')!='workflow_dispatch':
             raise SystemExit('Unexpected invocation type')
           mode=os.environ.get('IMPORT_MODE','dry_run')
-          if mode not in ('dry_run','limited_import'):
+          if mode!='dry_run':
             raise SystemExit('Unsupported import mode')
           # Activation is scoped to one exact approved supplier payload.
-          PRODUCTION_ACTIVATED=True
+          PRODUCTION_ACTIVATED=False
           PINNED_APPROVED_DIGEST='df89cba59799521170595346fff4af535ead81a611d82477b4d60da310726eca'
           if mode=='limited_import':
             if os.environ.get('CONFIRMATION_PHRASE')!='AUTHORIZE LIMITED SPORTS SOUTH IMPORT':

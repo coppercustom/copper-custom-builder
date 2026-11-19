@@ -256,6 +256,60 @@ jobs:
           print('DRY RUN - database writes: 0; sync checkpoint changes: 0.')
           print('SOAP 1.1 request succeeded; response structure inspected; no data imported.')
           PY
+      - name: Compare supplier records with Supabase (read only)
+        shell: bash
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
+            echo 'COMPARISON SKIPPED: configure GitHub Actions secret SUPABASE_SERVICE_ROLE_KEY'
+            exit 0
+          fi
+          python3 - <<'PY'
+          import os,json,urllib.request,urllib.parse,xml.etree.ElementTree as ET
+          root=ET.parse('/tmp/ss-response.xml').getroot()
+          result=next((e for e in root.iter() if e.tag.split('}')[-1]=='DailyItemUpdateResult'),None)
+          if result is None or not (result.text or '').strip(): raise SystemExit('Missing supplier result')
+          dataset=ET.fromstring(result.text)
+          incoming={}
+          for e in dataset:
+            if e.tag.split('}')[-1]!='Table': continue
+            fields={c.tag.split('}')[-1].upper():(c.text or '').strip() for c in e}
+            item=fields.get('ITEMNO','')
+            if not item or item in incoming: raise SystemExit('Invalid or duplicate ITEMNO')
+            incoming[item]=fields
+          if not incoming: raise SystemExit('No incoming rows')
+          endpoint='https://cyrmysbcrpiadchcpsfa.supabase.co/rest/v1/cc_sports_south_products'
+          key=os.environ['SUPABASE_SERVICE_ROLE_KEY']
+          existing={}
+          ids=list(incoming)
+          for start in range(0,len(ids),50):
+            batch=ids[start:start+50]
+            query=urllib.parse.urlencode({'select':'item_no,description,short_description',
+              'item_no':'in.('+','.join('"'+x.replace('\\','\\\\').replace('"','\\"')+'"' for x in batch)+')'})
+            request=urllib.request.Request(endpoint+'?'+query,headers={
+              'apikey':key,'Authorization':'Bearer '+key,'Accept':'application/json'})
+            with urllib.request.urlopen(request,timeout=25) as response:
+              records=json.load(response)
+            for record in records: existing[str(record['item_no'])]=record
+          inserts=changed=unchanged=0
+          for item,fields in incoming.items():
+            row=existing.get(item)
+            if row is None: inserts+=1; continue
+            if ((row.get('description') or '').strip()!=fields.get('IDESC','') or
+                (row.get('short_description') or '').strip()!=fields.get('SHDESC','')):
+              changed+=1
+            else: unchanged+=1
+          print('SUPABASE READ-ONLY COMPARISON')
+          print('Incoming records:',len(incoming))
+          print('Existing ITEMNO matches:',len(existing))
+          print('New ITEMNO:',inserts)
+          print('Description changes (candidate updates):',changed)
+          print('Description unchanged:',unchanged)
+          print('Other field changes: not yet compared')
+          print('Database writes: 0; sync checkpoints changed: 0')
+          PY
       - name: Remove temporary supplier data
         if: always()
         shell: bash

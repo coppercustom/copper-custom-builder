@@ -52,7 +52,7 @@ jobs:
               with c.transaction():
                 with c.cursor() as cur:
                   cur.execute('SELECT pg_advisory_xact_lock(hashtext(%s))',(window,))
-                  cur.execute('SELECT digest FROM test_checkpoints WHERE window=%s',(window,))
+                  cur.execute('SELECT digest FROM test_checkpoints WHERE sync_window=%s',(window,))
                   found=cur.fetchone()
                   d=digest(rows)
                   if found:
@@ -61,13 +61,13 @@ jobs:
                   for k,v in rows:
                     cur.execute('INSERT INTO test_items(k,v) VALUES(%s,%s) ON CONFLICT(k) DO UPDATE SET v=EXCLUDED.v',(k,v))
                     if fail:raise RuntimeError('injected failure')
-                  cur.execute('INSERT INTO test_checkpoints(window,digest) VALUES(%s,%s)',(window,d))
+                  cur.execute('INSERT INTO test_checkpoints(sync_window,digest) VALUES(%s,%s)',(window,d))
                   return 'committed'
           results={}
           with conn() as c:
             with c.cursor() as cur:
               cur.execute('CREATE TABLE test_items(k text PRIMARY KEY,v text NOT NULL)')
-              cur.execute('CREATE TABLE test_checkpoints(window text PRIMARY KEY,digest text NOT NULL)')
+              cur.execute('CREATE TABLE test_checkpoints(sync_window text PRIMARY KEY,digest text NOT NULL)')
           try:apply('w1',[('a','1')],fail=True)
           except RuntimeError:pass
           with conn() as c:
@@ -80,7 +80,7 @@ jobs:
           results['successful_commit']=apply('w1',[('a','1')])=='committed'
           with conn() as c:
             with c.cursor() as cur:
-              cur.execute('SELECT digest FROM test_checkpoints WHERE window=%s',('w1',))
+              cur.execute('SELECT digest FROM test_checkpoints WHERE sync_window=%s',('w1',))
               results['durable_checkpoint']=cur.fetchone()[0]==digest([('a','1')])
           results['idempotent_replay']=apply('w1',[('a','1')])=='replay'
           try:apply('w1',[('a','changed')])

@@ -597,6 +597,64 @@ $('cc-cat-add').addEventListener('click',async e=>{
    catalogMakerCache.clear();await loadCatalogEntries();catalogStatus(restoring?'Entry restored.':'Entry removed from active custom catalog.');
   }catch(err){catalogStatus('Unable to update entry: '+err.message,true);btn.disabled=false;}
  });
+
+ // Imported catalog visibility manager (supplier records are never deleted).
+ (function(){
+  const target=$('cc-cat-manage-results').parentElement;
+  const panel=document.createElement('div');
+  panel.className='card';panel.style.marginTop='20px';
+  panel.innerHTML='<h3>Manage imported catalog items</h3><p class="muted">Search the live firearm or light catalog. Removing a model hides it from customer search, including after supplier updates. Restore it at any time.</p><div class="row"><select id="cc-import-category"><option value="Firearm">Firearms</option><option value="Light">Lights</option></select><input class="grow" id="cc-import-search" type="search" placeholder="Search manufacturer or model (2+ characters)"><select id="cc-import-visibility"><option value="active">Active</option><option value="removed">Removed</option><option value="all">All</option></select><button type="button" class="secondary" id="cc-import-refresh">Search</button></div><p class="muted" id="cc-import-status" role="status">Enter a search to find imported products.</p><div id="cc-import-results"></div>';
+  target.insertAdjacentElement('afterend',panel);
+  const el=id=>panel.querySelector('#'+id);
+  let found=[],exclusions=[],sequence=0,timer=null;
+  const key=v=>String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  function matchingExclusion(item){
+   return exclusions.find(x=>x.category===item.category&&key(x.manufacturer)===key(item.manufacturer)&&key(x.model)===key(item.model)&&(!x.weapon_class||x.weapon_class===item.weapon_class)&&!x.restored_at);
+  }
+  function renderImported(){
+   const mode=el('cc-import-visibility').value;
+   const rows=found.filter(x=>mode==='all'||(mode==='removed'?!!matchingExclusion(x):!matchingExclusion(x)));
+   el('cc-import-status').textContent=rows.length+' matching '+mode+' catalog models'+(found.length>=50?' (first 50 results; narrow your search)':'');
+   el('cc-import-results').innerHTML=rows.length?rows.map((x,i)=>{
+    const ex=matchingExclusion(x),idx=found.indexOf(x);
+    return '<div class="card row" style="margin:8px 0"><div class="grow"><strong>'+escape(x.manufacturer)+' — '+escape(x.model)+'</strong><div class="muted">'+escape(x.category)+(x.weapon_class?' · '+escape(x.weapon_class):'')+(ex?' · Removed':' · Active')+'</div></div><button type="button" data-import-index="'+idx+'" class="'+(ex?'secondary':'')+'">'+(ex?'Restore':'Remove')+'</button></div>';
+   }).join(''):'<p class="muted">No matching models. Try another search or visibility filter.</p>';
+  }
+  async function searchImported(){
+   const seq=++sequence,term=el('cc-import-search').value.trim(),category=el('cc-import-category').value;
+   if(term.length<2){found=[];el('cc-import-results').innerHTML='';el('cc-import-status').textContent='Enter at least two characters.';return;}
+   el('cc-import-status').textContent='Searching catalog…';
+   try{
+    const [items,removed]=await Promise.all([
+     authorizedRequest('/rest/v1/rpc/cc_employee_catalog_search',{method:'POST',body:{p_category:category,p_search:term,p_limit:50}}),
+     authorizedRequest(table('cc_catalog_exclusions','select=id,category,manufacturer,model,weapon_class,restored_at&category=eq.'+encodeURIComponent(category)+'&restored_at=is.null&limit=1000'))
+    ]);
+    if(seq!==sequence)return;
+    found=Array.isArray(items)?items:[];exclusions=Array.isArray(removed)?removed:[];renderImported();
+   }catch(err){if(seq===sequence)el('cc-import-status').textContent='Catalog search failed: '+err.message;}
+  }
+  el('cc-import-search').addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(searchImported,350);});
+  el('cc-import-refresh').addEventListener('click',searchImported);
+  el('cc-import-category').addEventListener('change',searchImported);
+  el('cc-import-visibility').addEventListener('change',renderImported);
+  el('cc-import-results').addEventListener('click',async e=>{
+   const btn=e.target.closest('[data-import-index]');if(!btn)return;
+   const item=found[Number(btn.dataset.importIndex)];if(!item)return;
+   const existing=matchingExclusion(item),restore=!!existing;
+   if(!window.confirm((restore?'Restore':'Remove')+' '+item.manufacturer+' — '+item.model+' from the customer catalog?'))return;
+   btn.disabled=true;
+   try{
+    if(restore){
+     const result=await authorizedRequest(table('cc_catalog_exclusions','id=eq.'+existing.id+'&select=id'),{method:'PATCH',body:{restored_at:new Date().toISOString(),restored_by:currentUser.id},headers:{Prefer:'return=representation'}});
+     if(!Array.isArray(result)||result.length!==1)throw Error('Restore did not update a record.');
+    }else{
+     await authorizedRequest(table('cc_catalog_exclusions'),{method:'POST',body:{category:item.category,manufacturer:item.manufacturer,model:item.model,weapon_class:item.weapon_class||null,created_by:currentUser.id},headers:{Prefer:'return=minimal'}});
+    }
+    await searchImported();catalogStatus(restore?'Model restored to customer catalog.':'Model hidden from customer catalog.');
+   }catch(err){catalogStatus('Unable to update catalog: '+err.message,true);btn.disabled=false;}
+  });
+ })();
+
 $('cc-refresh').type='button';
 $('cc-refresh').addEventListener('click',async e=>{e.preventDefault();if(!confirmConsultationLeave())return;try{await load();message('Updated.')}catch(err){message(err.message,true)}});
 $('cc-search').addEventListener('input',render);$('cc-filter').addEventListener('change',render);$('cc-assignment-filter').addEventListener('change',render);

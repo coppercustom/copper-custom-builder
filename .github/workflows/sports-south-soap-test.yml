@@ -9,6 +9,10 @@ on:
         options:
           - dry_run
         default: dry_run
+      expected_plan_digest:
+        description: 'Optional SHA-256 digest to verify against the latest import plan (no writes)'
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -267,6 +271,7 @@ jobs:
         shell: bash
         env:
           IMPORT_MODE: ${{ inputs.mode }}
+          EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
@@ -561,6 +566,37 @@ jobs:
             'insert_id_hashes':[fingerprint(i) for i in sorted(insert_plan)],
             'update_field_counts':dict(Counter(field for _,changed in update_plan for field in changed)),
           }
+          # Exact approval fingerprint covers every allowed target field and
+          # the pre-import snapshot, not merely item IDs or change counts.
+          # Never print the raw canonical payload (contains supplier catalog data).
+          canonical_inserts=[]
+          for item in sorted(insert_plan):
+            fields=incoming[item]
+            canonical_inserts.append({'item_no':item,'attributes':{},
+              'brand_id':fields.get('IMFGNO',''),
+              **{column:fields.get(source,'') for column,source in safe_map.items()}})
+          canonical_updates=[]
+          for item,columns in sorted(update_plan):
+            fields=incoming[item]
+            row=existing[item]
+            canonical_updates.append({'item_no':item,
+              'before':{column:row.get(column) for column in sorted(set(columns+['brand_id']))},
+              'after':{column:fields.get(safe_map[column],'') for column in sorted(columns)}})
+          report['approved_payload_digest']=hashlib.sha256(json.dumps({
+            'inserts':canonical_inserts,'updates':canonical_updates
+          },sort_keys=True,separators=(',',':')).encode()).hexdigest()
+          expected_digest=os.environ.get('EXPECTED_PLAN_DIGEST','').strip()
+          if expected_digest:
+            if len(expected_digest)!=64 or any(c not in '0123456789abcdef' for c in expected_digest.lower()):
+              raise SystemExit('Invalid expected plan digest format')
+            if not __import__('hmac').compare_digest(expected_digest.lower(),report['approved_payload_digest']):
+              raise SystemExit('APPROVAL GATE FAILED: payload differs from supplied fingerprint')
+            report['fingerprint_match']=True
+            print('APPROVAL FINGERPRINT MATCH: PASS (still dry-run only)')
+          else:
+            report['fingerprint_match']=False
+            print('APPROVAL FINGERPRINT: not supplied; no approval assumed')
+          print('Proposed payload SHA-256:',report['approved_payload_digest'])
           # Simulate interrupted batches without performing any network writes.
           # A resumed run must skip already-applied inserts and updates and stop
           # if a record diverges from both its approved before/after snapshots.
@@ -608,6 +644,8 @@ jobs:
               raise SystemExit('Write path locked: limited_import mode is not enabled')
             if os.environ.get('ENABLE_SPORTS_SOUTH_WRITES')!='true':
               raise SystemExit('Write path locked: missing deployment approval gate')
+            if not expected_digest or not __import__('hmac').compare_digest(expected_digest.lower(),report['approved_payload_digest']):
+              raise SystemExit('Write path locked: approved payload fingerprint missing or changed')
             if set(approved_ids)!=set(insert_plan):
               raise SystemExit('Write path locked: approved insert plan has drifted')
             if set(approved_updates)!=set(item for item,_ in update_plan):

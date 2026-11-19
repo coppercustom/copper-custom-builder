@@ -4,11 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'Execution mode (production intentionally locked until approval)'
+        description: 'Execution mode (limited import requires separate activation commit)'
         type: choice
         options:
           - dry_run
+          - limited_import
         default: dry_run
+      confirmation_phrase:
+        description: 'Reserved for final production authorization; not sufficient to unlock writes'
+        type: string
+        required: false
       expected_plan_digest:
         description: 'Optional SHA-256 digest to verify against the latest import plan (no writes)'
         type: string
@@ -272,6 +277,8 @@ jobs:
         env:
           IMPORT_MODE: ${{ inputs.mode }}
           EXPECTED_PLAN_DIGEST: ${{ inputs.expected_plan_digest }}
+          CONFIRMATION_PHRASE: ${{ inputs.confirmation_phrase }}
+          ENABLE_SPORTS_SOUTH_WRITES: 'false'
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
@@ -520,8 +527,13 @@ jobs:
           # Never serialize raw SOAP fields, which include prohibited supplier pricing.
           if os.environ.get('GITHUB_EVENT_NAME')!='workflow_dispatch':
             raise SystemExit('Unexpected invocation type')
-          if os.environ.get('IMPORT_MODE','dry_run')!='dry_run':
-            raise SystemExit('Production import is not authorized or implemented')
+          mode=os.environ.get('IMPORT_MODE','dry_run')
+          if mode not in ('dry_run','limited_import'):
+            raise SystemExit('Unsupported import mode')
+          # Explicit source-level lock remains until a separately approved commit.
+          PRODUCTION_ACTIVATED=False
+          if mode=='limited_import' and not PRODUCTION_ACTIVATED:
+            raise SystemExit('Production import is staged but NOT activated; no writes performed')
           blocked_upcs=existing_upc_matches | repeated_new_upcs | match_upcs
           blocked_mpns=match_mpns
           insert_plan=[]
@@ -546,7 +558,7 @@ jobs:
           import hashlib
           fingerprint=lambda item: hashlib.sha256(item.encode()).hexdigest()[:12]
           report={
-            'mode':'dry_run',
+            'mode':mode,
             'import_approved':False,
             'production_enabled':False,
             'plan_digest':hashlib.sha256(json.dumps({'inserts':sorted(insert_plan),'updates':sorted((i,sorted(c)) for i,c in update_plan),'brand_conflicts':sorted(i for i,_,_ in mismatches)},sort_keys=True).encode()).hexdigest(),
@@ -642,6 +654,8 @@ jobs:
           def execute_approved_limited_import(approved_ids, approved_updates):
             if os.environ.get('IMPORT_MODE')!='limited_import':
               raise SystemExit('Write path locked: limited_import mode is not enabled')
+            if not PRODUCTION_ACTIVATED or os.environ.get('CONFIRMATION_PHRASE')!='AUTHORIZE LIMITED SPORTS SOUTH IMPORT':
+              raise SystemExit('Write path locked: explicit production authorization not active')
             if os.environ.get('ENABLE_SPORTS_SOUTH_WRITES')!='true':
               raise SystemExit('Write path locked: missing deployment approval gate')
             if not expected_digest or not __import__('hmac').compare_digest(expected_digest.lower(),report['approved_payload_digest']):
@@ -734,7 +748,7 @@ jobs:
               verified_updates+=1
             print('LIMITED IMPORT VERIFIED inserts:',verified_inserts,
                   'updates:',verified_updates,'already-applied:',skipped,'checkpoint writes: 0')
-          print('Production mode: LOCKED pending explicit approval and further validation.')
+          print('Production mode: LOCKED pending separate execution authorization.')
           if len(insert_plan)+sum(held_new.values())!=len(incoming_new):
             raise SystemExit('Import plan reconciliation failed: new records')
           if len(update_plan)+report['unchanged_count']!=len(existing):

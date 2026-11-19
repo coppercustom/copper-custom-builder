@@ -1,0 +1,26 @@
+name: Gateway header trust probe (one-shot)
+on:
+  push:
+    paths:
+      - '.github/workflows/gateway-header-probe.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check trusted header handling (no sensitive values)
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://cyrmysbcrpiadchcpsfa.supabase.co/functions/v1/cc-gateway-header-diagnostic"
+          for mode in baseline forged; do
+            if [ "$mode" = baseline ]; then
+              curl --fail-with-body --silent --show-error --max-time 15 -X POST "$URL" -H 'x-cc-probe: gateway-header-test-v1' -H 'x-cc-sentinel: 192.0.2.123' -o result.json
+            else
+              curl --fail-with-body --silent --show-error --max-time 15 -X POST "$URL" -H 'x-cc-probe: gateway-header-test-v1' -H 'x-cc-sentinel: 192.0.2.123' -H 'cf-connecting-ip: 192.0.2.123' -H 'x-real-ip: 192.0.2.123' -H 'x-forwarded-for: 192.0.2.123' -o result.json
+            fi
+            echo "$mode: $(cat result.json)"
+          done

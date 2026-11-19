@@ -1056,7 +1056,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sports-south-import-readiness
-          path: /tmp/ss-import-readiness.json /tmp/ss-audit-summary.json
+          path: /tmp/ss-import-readiness.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Remove temporary supplier data

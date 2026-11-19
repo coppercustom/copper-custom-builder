@@ -1,0 +1,78 @@
+name: Sports South SOAP 1.1 authenticated test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  soap-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SS_CUSTOMER: ${{ secrets.SPORTS_SOUTH_CUSTOMER_NUMBER }}
+      SS_USERNAME: ${{ secrets.SPORTS_SOUTH_USERNAME }}
+      SS_PASSWORD: ${{ secrets.SPORTS_SOUTH_PASSWORD }}
+    steps:
+      - name: Validate secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in SS_CUSTOMER SS_USERNAME SS_PASSWORD; do
+            test -n "${!name}" || { echo "::error::Missing $name"; exit 1; }
+          done
+      - name: Request DailyItemUpdate over SOAP 1.1
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os, datetime, xml.etree.ElementTree as ET
+          from xml.sax.saxutils import escape
+          ns='http://webservices.theshootingwarehouse.com/smart/inventory.asmx'
+          env='http://schemas.xmlsoap.org/soap/envelope/'
+          ET.register_namespace('soap',env)
+          root=ET.Element('{%s}Envelope'%env)
+          body=ET.SubElement(root,'{%s}Body'%env)
+          operation=ET.SubElement(body,'{%s}DailyItemUpdate'%ns)
+          fields={
+            'CustomerNumber':os.environ['SS_CUSTOMER'],
+            'UserName':os.environ['SS_USERNAME'],
+            'Password':os.environ['SS_PASSWORD'],
+            'LastUpdate':datetime.datetime.now(datetime.timezone.utc).strftime('%m/%d/%Y'),
+            'LastItem':'',
+            'Source':''
+          }
+          for name,value in fields.items():
+            ET.SubElement(operation,'{%s}%s'%(ns,name)).text=value
+          ET.ElementTree(root).write('/tmp/ss-request.xml',encoding='utf-8',xml_declaration=True)
+          print('SOAP 1.1 request generated (body withheld).')
+          PY
+          status="$(curl --silent --show-error --max-time 50 --tlsv1.2 --tls-max 1.2 \
+            --ciphers 'ECDHE-RSA-AES128-SHA256' \
+            --header 'Content-Type: text/xml; charset=utf-8' \
+            --header 'SOAPAction: "http://webservices.theshootingwarehouse.com/smart/inventory.asmx/DailyItemUpdate"' \
+            --data-binary @/tmp/ss-request.xml \
+            --output /tmp/ss-response.xml --write-out '%{http_code}' \
+            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx')"
+          echo "HTTP status: $status"
+          SS_HTTP_STATUS="$status" python3 - <<'PY'
+          import os,xml.etree.ElementTree as ET
+          path='/tmp/ss-response.xml'
+          print('Response bytes:',os.path.getsize(path))
+          try: root=ET.parse(path).getroot()
+          except ET.ParseError: raise SystemExit('Non-XML response; contents withheld')
+          print('XML root:',root.tag.split('}')[-1])
+          names=[x.tag.split('}')[-1] for x in root.iter()]
+          print('SOAP fault present:', 'Fault' in names)
+          print('DailyItemUpdateResult present:', 'DailyItemUpdateResult' in names)
+          if os.environ['SS_HTTP_STATUS']!='200' or 'Fault' in names:
+            raise SystemExit('SOAP response was unsuccessful; contents withheld')
+          if 'DailyItemUpdateResult' not in names:
+            raise SystemExit('Expected result element missing; contents withheld')
+          print('SOAP 1.1 request succeeded; no data imported.')
+          PY
+      - name: Remove temporary supplier data
+        if: always()
+        shell: bash
+        run: rm -f /tmp/ss-request.xml /tmp/ss-response.xml

@@ -898,6 +898,71 @@ jobs:
           print('No raw supplier values, customer identifiers, or credentials printed.')
           print('Sync checkpoints changed: 0; write counts shown in verified import output when applicable.')
           PY
+      - name: Probe LastItem continuation (read-only, one bounded request)
+        if: ${{ inputs.overlap_days == '2' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          root=ET.parse('/tmp/ss-response.xml').getroot()
+          result=next((e for e in root.iter() if e.tag.split('}')[-1]=='DailyItemUpdateResult'),None)
+          if result is None or not (result.text or '').strip(): raise SystemExit('Continuation probe: missing initial result')
+          dataset=ET.fromstring(result.text)
+          ids=[(c.text or '').strip() for row in dataset if row.tag.split('}')[-1]=='Table'
+               for c in row if c.tag.split('}')[-1].upper()=='ITEMNO']
+          if len(ids)<1000:
+            print('CONTINUATION PROBE: skipped; initial page below observed 1000-record boundary.')
+            raise SystemExit(0)
+          if len(ids)!=len(set(ids)) or not ids or not all(x.isdecimal() for x in ids):
+            raise SystemExit('Continuation probe: IDs not unique numeric values; refusing cursor guess')
+          # Probe only the largest numeric ITEMNO. Do not claim completeness
+          # without a supplier-confirmed ordering/continuation contract.
+          cursor=str(max(map(int,ids)))
+          request=ET.parse('/tmp/ss-request.xml')
+          matches=[e for e in request.getroot().iter() if e.tag.split('}')[-1]=='LastItem']
+          if len(matches)!=1: raise SystemExit('Continuation probe: ambiguous LastItem')
+          matches[0].text=cursor
+          request.write('/tmp/ss-continuation-request.xml',encoding='utf-8',xml_declaration=True)
+          print('CONTINUATION PROBE: initial count:',len(ids),'numeric IDs:',len(set(ids)))
+          print('CONTINUATION PROBE: candidate cursor selected; cursor value withheld.')
+          PY
+          if [ ! -f /tmp/ss-continuation-request.xml ]; then exit 0; fi
+          SOAP_ACTION="$(cat /tmp/ss-action)"
+          status="$(curl --silent --show-error --max-time 50 --tlsv1.2 --tls-max 1.2 \\
+            --ciphers 'ECDHE-RSA-AES128-SHA256' \\
+            --header 'Content-Type: text/xml; charset=utf-8' \\
+            --header "SOAPAction: \\"$SOAP_ACTION\\"" \\
+            --data-binary @/tmp/ss-continuation-request.xml \\
+            --output /tmp/ss-continuation-response.xml --write-out '%{http_code}' \\
+            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx')"
+          echo "Continuation HTTP status: $status"
+          SS_CONTINUATION_STATUS="$status" python3 - <<'PY'
+          import os,xml.etree.ElementTree as ET
+          if os.environ['SS_CONTINUATION_STATUS']!='200': raise SystemExit('Continuation HTTP error; body withheld')
+          def ids_from(path):
+            root=ET.parse(path).getroot()
+            if any(e.tag.split('}')[-1]=='Fault' for e in root.iter()):
+              raise SystemExit('Continuation SOAP fault; body withheld')
+            result=next((e for e in root.iter() if e.tag.split('}')[-1]=='DailyItemUpdateResult'),None)
+            if result is None: raise SystemExit('Continuation result missing')
+            data=ET.fromstring(result.text or '<NewDataSet/>')
+            ids=[(c.text or '').strip() for row in data if row.tag.split('}')[-1]=='Table'
+                 for c in row if c.tag.split('}')[-1].upper()=='ITEMNO']
+            if len(ids)!=len(set(ids)): raise SystemExit('Continuation duplicate IDs within page')
+            return ids
+          first=ids_from('/tmp/ss-response.xml')
+          second=ids_from('/tmp/ss-continuation-response.xml')
+          overlap=len(set(first)&set(second))
+          cursor=int(max(first,key=lambda x:int(x)))
+          higher=sum(x.isdecimal() and int(x)>cursor for x in second)
+          print('CONTINUATION PROBE: second page records:',len(second))
+          print('CONTINUATION PROBE: overlapping ITEMNO count:',overlap)
+          print('CONTINUATION PROBE: ITEMNO greater than candidate cursor:',higher)
+          print('CONTINUATION PROBE: nonadvancing:',bool(second) and higher==0)
+          print('CONTINUATION PROBE: read-only; completeness and pagination semantics remain UNVERIFIED.')
+          print('CONTINUATION PROBE: no product or checkpoint writes.')
+          PY
       - name: Upload sanitized import-readiness report
         if: always()
         uses: actions/upload-artifact@v4
@@ -909,4 +974,4 @@ jobs:
       - name: Remove temporary supplier data
         if: always()
         shell: bash
-        run: rm -f /tmp/ss-request.xml /tmp/ss-response.xml /tmp/ss.wsdl /tmp/ss-action /tmp/ss-import-readiness.json
+        run: rm -f /tmp/ss-request.xml /tmp/ss-response.xml /tmp/ss-continuation-request.xml /tmp/ss-continuation-response.xml /tmp/ss.wsdl /tmp/ss-action /tmp/ss-import-readiness.json

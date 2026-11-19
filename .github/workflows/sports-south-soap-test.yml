@@ -132,6 +132,21 @@ jobs:
             ]
             matched=[p for p in patterns if re.search(p,safe,re.I)]
             print('Recognized SOAP validation phrases:', ', '.join(matched) if matched else 'none')
+            # Display only an allowlisted vocabulary, never arbitrary values or identifiers.
+            allowed=set(('server error unable to process request exception occurred while executing method'
+              ' object reference not set instance null value parameter invalid format input'
+              ' string correct date time integer conversion failed authentication login'
+              ' credentials account customer source lastupdate lastitem username password'
+              ' access denied unauthorized required missing provided expected unexpected'
+              ' database connection timeout operation failed error internal application'
+              ' was is the a an of in on for with from to and or as at by this that'
+              ' could cannot can not be has have been no found recognized supplied'
+              ' item update daily SOAP fault service remote returned during processing'
+              ' data query syntax near incorrect table procedure stored permission'
+              ' number user name credentials invalid request').lower().split())
+            tokens=re.findall(r'[A-Za-z]+|[0-9]+|[^A-Za-z0-9]+',safe)
+            scrubbed=''.join(t if (not t.isalnum() and len(t)<=3 and not any(ch in t for ch in '<>')) or (t.isalpha() and t.lower() in allowed) else '[redacted]' for t in tokens)
+            print('Allowlisted SOAP fault text:',scrubbed[:250])
             print('SOAP fault character count:',len(raw_detail))
             print('Raw fault text withheld to protect credentials and supplier data.')
             raise SystemExit('SOAP fault returned; no catalog data modified')

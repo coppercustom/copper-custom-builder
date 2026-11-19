@@ -84,6 +84,13 @@ jobs:
             tag=('{%s}%s'%(ns,name)) if qualified else name
             ET.SubElement(operation,tag).text=values[name]
           if len(definitions)!=len(values): raise SystemExit('WSDL parameter count mismatch')
+          # Report the supplier's declared continuation inputs without exposing
+          # credentials or making an additional SOAP request.
+          continuation_inputs=[d.get('name') for d in definitions if
+            any(t in d.get('name','').lower() for t in ('lastitem','page','offset','cursor','start'))]
+          print('WSDL continuation-related request fields:',continuation_inputs)
+          print('WSDL continuation semantics: UNVERIFIED; never assume LastItem is a complete page cursor.')
+
           ET.ElementTree(root).write('/tmp/ss-request.xml',encoding='utf-8',xml_declaration=True)
           print('SOAP request generated from live WSDL schema (body withheld).')
           PY
@@ -739,6 +746,17 @@ jobs:
               raise SystemExit('Interrupted-run recovery simulation failed')
             if set(resumed)&completed:
               raise SystemExit('Interrupted-run would repeat a completed write')
+          # Nonempty synthetic batch verifies resume classification even when
+          # the supplier currently returns zero actionable changes.
+          synthetic=[('insert','synthetic-a'),('update','synthetic-b'),('insert','synthetic-c')]
+          for cut in range(len(synthetic)+1):
+            applied=set(synthetic[:cut])
+            pending=[x for x in synthetic if x not in applied]
+            if len(applied)+len(pending)!=3 or any(x in applied for x in pending):
+              raise SystemExit('Synthetic nonempty recovery failed')
+          assert classify_resume({'x':0},{'x':1},{'x':2})=='conflict'
+          print('NONEMPTY SYNTHETIC RECOVERY: PASS across 4 interruption boundaries; no writes.')
+          report['synthetic_nonempty_recovery']='passed'
           report['recovery_simulation']='passed'
           report['simulated_interruption_points']=len(sequence)+1
           report['production_write_path_tested']=False

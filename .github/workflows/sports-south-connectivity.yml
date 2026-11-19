@@ -1,0 +1,37 @@
+name: Sports South TLS connectivity test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tls-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check TLS 1.2 and legacy cipher negotiation
+        shell: bash
+        run: |
+          set -uo pipefail
+          HOST="webservices.theshootingwarehouse.com"
+          echo "OpenSSL version:"
+          openssl version
+          echo "Testing TLS 1.2 with ECDHE-RSA-AES128-SHA256"
+          if timeout 15 openssl s_client -connect "${HOST}:443" -servername "$HOST" -tls1_2 -cipher 'ECDHE-RSA-AES128-SHA256' -verify_return_error </dev/null > /tmp/ss-tls.txt 2>&1; then
+            grep -E 'Protocol|Cipher|Verification:|Verify return code' /tmp/ss-tls.txt || true
+            echo "TLS_NEGOTIATION=success" >> "$GITHUB_STEP_SUMMARY"
+          else
+            grep -E 'error|alert|handshake|reset|Verify return code' /tmp/ss-tls.txt | tail -12 || true
+            echo "TLS_NEGOTIATION=failed" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+      - name: Test HTTP response using negotiated TLS
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --location --max-time 15 --tlsv1.2 --tls-max 1.2 \
+            --ciphers 'ECDHE-RSA-AES128-SHA256' \
+            --output /dev/null --write-out 'HTTP status: %{http_code}\n' \
+            'https://webservices.theshootingwarehouse.com/smart/inventory.asmx'

@@ -271,8 +271,8 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]]; then
-            echo 'COMPARISON SKIPPED: configure GitHub Actions secret SUPABASE_SERVICE_ROLE_KEY'
-            exit 0
+            echo '::error::Missing SUPABASE_SERVICE_ROLE_KEY; import readiness cannot be verified'
+            exit 1
           fi
           python3 - <<'PY'
           import os,json,urllib.request,urllib.parse,xml.etree.ElementTree as ET
@@ -289,6 +289,7 @@ jobs:
             if not item or item in incoming: raise SystemExit('Invalid or duplicate ITEMNO')
             incoming[item]=fields
           if not incoming: raise SystemExit('No incoming rows')
+          if len(incoming)>10000: raise SystemExit('Safety stop: unexpected supplier response size')
           endpoint='https://cyrmysbcrpiadchcpsfa.supabase.co/rest/v1/cc_sports_south_products'
           key=os.environ['SUPABASE_SERVICE_ROLE_KEY']
           existing={}
@@ -541,6 +542,9 @@ jobs:
           fingerprint=lambda item: hashlib.sha256(item.encode()).hexdigest()[:12]
           report={
             'mode':'dry_run',
+            'import_approved':False,
+            'production_enabled':False,
+            'idempotency_key':'sports-south-daily-'+__import__('datetime').datetime.now(__import__('datetime').timezone.utc).strftime('%Y-%m-%d'),
             'incoming_count':len(incoming),
             'existing_count':len(existing),
             'new_count':len(incoming_new),
@@ -567,6 +571,13 @@ jobs:
           print('Unchanged existing:',report['unchanged_count'])
           print('Report: ss-import-readiness.json (hashed IDs, counts only)')
           print('Production mode: LOCKED pending explicit approval and further validation.')
+          if len(insert_plan)+sum(held_new.values())!=len(incoming_new):
+            raise SystemExit('Import plan reconciliation failed: new records')
+          if len(update_plan)+report['unchanged_count']!=len(existing):
+            raise SystemExit('Import plan reconciliation failed: existing records')
+          if len(mismatches)>len(existing):
+            raise SystemExit('Import plan reconciliation failed: brand conflicts')
+          print('Plan reconciliation: PASS; all incoming records accounted for.')
           print('Decision: DRY RUN ONLY. No inserts, updates, checkpoint changes or supplier pricing.')
           print('No raw supplier values, customer identifiers, or credentials printed.')
           print('Database writes: 0; sync checkpoints changed: 0')

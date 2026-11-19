@@ -1039,7 +1039,7 @@ jobs:
           lines += ['','**Production writes:** disabled. **Checkpoint writes:** disabled.',
                     'See sanitized JSON artifacts for aggregate review counts.']
           if summary:
-            with open(summary,'a') as f:f.write('\\n'.join(lines)+'\\n')
+            with open(summary,'a') as f:f.write('\n'.join(lines)+'\n')
           for k,v in checks.items():print(('PASS' if v else 'FAIL')+': '+k)
           if not all(checks.values()):sys.exit('Consolidated audit failed; inspect JSON report')
           PY
@@ -1062,4 +1062,4 @@ jobs:
       - name: Remove temporary supplier data
         if: always()
         shell: bash
-        run: rm -f /tmp/ss-pagination-summary.json /tmp/ss-page-request.xml /tmp/ss-page-response.xml /tmp/ss-request.xml /tmp/ss-response.xml /tmp/ss-continuation-request.xml /tmp/ss-continuation-response.xml /tmp/ss.wsdl /tmp/ss-action /tmp/ss-import-readiness.json
+        run: rm -f /tmp/ss-pagination-summary.json /tmp/ss-page-request.xml /tmp/ss-page-response.xml /tmp/ss-request.xml /tmp/ss-response.xml /tmp/ss-continuation-request.xml /tmp/ss-continuation-response.xml /tmp/ss.wsdl /tmp/ss-action /tmp/ss-import-readiness.json /tmp/ss-audit-summary.json

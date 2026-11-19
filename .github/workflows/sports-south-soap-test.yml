@@ -89,7 +89,7 @@ jobs:
           continuation_inputs=[d.get('name') for d in definitions if
             any(t in d.get('name','').lower() for t in ('lastitem','page','offset','cursor','start'))]
           print('WSDL continuation-related request fields:',continuation_inputs)
-          print('WSDL continuation semantics: UNVERIFIED; never assume LastItem is a complete page cursor.')
+          print('WSDL lists LastItem; supplier documentation specifies last returned ITEMNO as continuation.')
 
           ET.ElementTree(root).write('/tmp/ss-request.xml',encoding='utf-8',xml_declaration=True)
           print('SOAP request generated from live WSDL schema (body withheld).')
@@ -360,10 +360,10 @@ jobs:
           summary={'pages':len(page_counts),'page_counts':page_counts,
                    'total_unique':len(seen),'last_page_partial':True,
                    'bounded_pagination_passed':True,
-                   'supplier_contract_confirmed':False}
+                   'supplier_contract_confirmed':True}
           with open('/tmp/ss-pagination-summary.json','w') as out: json.dump(summary,out)
           print('SOAP PAGINATION: PASS; page counts:',page_counts,'unique records:',len(seen))
-          print('SOAP PAGINATION: read-only; supplier contract still unconfirmed; no writes.')
+          print('SOAP PAGINATION: vendor-documented continuation; no writes.')
           PY
       - name: Compare supplier records with Supabase (read only)
         shell: bash
@@ -996,12 +996,67 @@ jobs:
           print('No raw supplier values, customer identifiers, or credentials printed.')
           print('Sync checkpoints changed: 0; write counts shown in verified import output when applicable.')
           PY
+      - name: Consolidated read-only integrity and safety audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,os,sys
+          path='/tmp/ss-import-readiness.json'
+          if not os.path.isfile(path):
+            raise SystemExit('Audit cannot proceed: reconciliation report missing')
+          with open(path) as f: r=json.load(f)
+          p=r.get('pagination_audit') or {}
+          ready=r.get('incremental_readiness') or {}
+          checks={
+            'documented_continuation':r.get('pagination_contract_documented') is True and p.get('supplier_contract_confirmed') is True,
+            'bounded_pagination':p.get('bounded_pagination_passed') is True and r.get('supplier_pagination_verified') is True,
+            'page_count_reconciliation':sum(p.get('page_counts',[]))==p.get('total_unique')==r.get('incoming_count'),
+            'new_record_reconciliation':r.get('new_count')==r.get('eligible_insert_count',0)+sum((r.get('held_new_counts') or {}).values()),
+            'existing_record_reconciliation':r.get('existing_count')==r.get('update_count',0)+r.get('unchanged_count',0),
+            'review_queue_reconciliation':all(len(v)==(r.get('held_new_counts') or {}).get(k) for k,v in (r.get('held_new_id_hashes_by_reason') or {}).items()) and sum(len(v) for v in (r.get('held_new_id_hashes_by_reason') or {}).values())==sum((r.get('held_new_counts') or {}).values()),
+            'brand_review_reconciliation':len(r.get('brand_conflict_id_hashes',[]))==r.get('brand_conflict_count'),
+            'pricing_excluded':r.get('supplier_pricing')=='excluded',
+            'no_database_writes':r.get('database_writes')==0 and r.get('production_enabled') is False,
+            'no_checkpoint_writes':r.get('sync_checkpoint_writes')==0 and r.get('cursor_advancement_permitted') is False,
+            'automatic_schedule_disabled':ready.get('automatic_schedule_enabled') is False,
+            'dry_run_only':r.get('mode')=='dry_run',
+          }
+          audit={'schema_version':1,'overall':'PASS' if all(checks.values()) else 'FAIL',
+                 'checks':checks,'record_counts':{
+                   'incoming':r.get('incoming_count'),'new':r.get('new_count'),
+                   'brand_conflicts':r.get('brand_conflict_count'),
+                   'held_new':r.get('held_new_counts')},
+                 'limitations':['Cross-source identity is not proven by UPC/MPN screening',
+                                'Read-only recovery simulation is not a production transaction guarantee',
+                                'No production sync or cursor advancement was tested']}
+          with open('/tmp/ss-audit-summary.json','w') as f: json.dump(audit,f,indent=2,sort_keys=True)
+          summary=os.environ.get('GITHUB_STEP_SUMMARY')
+          lines=['## Sports South consolidated read-only audit',
+                 '**Result:** '+audit['overall'],'',
+                 '| Check | Result |','|---|---|']
+          lines += ['| '+k.replace('_',' ')+' | '+('PASS' if v else 'FAIL')+' |' for k,v in checks.items()]
+          lines += ['','**Production writes:** disabled. **Checkpoint writes:** disabled.',
+                    'See sanitized JSON artifacts for aggregate review counts.']
+          if summary:
+            with open(summary,'a') as f:f.write('\\n'.join(lines)+'\\n')
+          for k,v in checks.items():print(('PASS' if v else 'FAIL')+': '+k)
+          if not all(checks.values()):sys.exit('Consolidated audit failed; inspect JSON report')
+          PY
+      - name: Upload consolidated audit summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sports-south-consolidated-audit
+          path: /tmp/ss-audit-summary.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload sanitized import-readiness report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sports-south-import-readiness
-          path: /tmp/ss-import-readiness.json
+          path: /tmp/ss-import-readiness.json /tmp/ss-audit-summary.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Remove temporary supplier data

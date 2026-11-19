@@ -1043,12 +1043,69 @@ jobs:
           for k,v in checks.items():print(('PASS' if v else 'FAIL')+': '+k)
           if not all(checks.values()):sys.exit('Consolidated audit failed; inspect JSON report')
           PY
+      - name: Fault-injection and replay safety tests (synthetic only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json,hashlib,xml.etree.ElementTree as ET
+          def parse(payload):
+            root=ET.fromstring(payload)
+            ids=[e.attrib['id'] for e in root.findall('item')]
+            if len(ids)!=len(set(ids)):raise ValueError('duplicate identifiers')
+            if any(not i.strip() for i in ids):raise ValueError('blank identifier')
+            return ids
+          def digest(ids):
+            return hashlib.sha256(json.dumps(ids,separators=(',',':')).encode()).hexdigest()
+          def guarded_commit(state,batch,fail_after=None):
+            staged=dict(state)
+            for n,(key,value) in enumerate(batch):
+              if fail_after is not None and n==fail_after:raise RuntimeError('injected failure')
+              staged[key]=value
+            return staged
+          checks={}
+          try:parse('<items><item id="1"></items>')
+          except ET.ParseError:checks['malformed_xml_rejected']=True
+          try:parse('<items><item id="1"/><item id="1"/></items>')
+          except ValueError:checks['duplicate_ids_rejected']=True
+          try:parse('<items><item id=""/></items>')
+          except ValueError:checks['blank_ids_rejected']=True
+          first=parse('<items><item id="a"/><item id="b"/></items>')
+          checks['deterministic_replay']=digest(first)==digest(parse('<items><item id="a"/><item id="b"/></items>'))
+          checkpoint={'last_successful_window_end':'prior','rows':{'a':'old'}}
+          before=json.dumps(checkpoint,sort_keys=True)
+          try:
+            guarded_commit(checkpoint['rows'],[('a','new'),('b','new')],fail_after=1)
+          except RuntimeError:pass
+          checks['injected_failure_leaves_checkpoint_unchanged']=json.dumps(checkpoint,sort_keys=True)==before
+          committed=guarded_commit(checkpoint['rows'],[('a','new'),('b','new')])
+          checks['synthetic_replay_idempotent']=guarded_commit(committed,[('a','new'),('b','new')])==committed
+          def complete(pages,limit=1000):
+            return bool(pages) and len(pages[-1])<limit and all(len(page)<=limit for page in pages)
+          checks['incomplete_pagination_rejected']=not complete([list(range(1000))])
+          checks['complete_pagination_accepted']=complete([list(range(1000)),list(range(4))])
+          report={'schema_version':1,'scope':'synthetic fault injection; no supplier writes',
+                  'checks':checks,'overall':'PASS' if len(checks)==8 and all(checks.values()) else 'FAIL',
+                  'production_transaction_verified':False,
+                  'checkpoint_writes':0}
+          with open('/tmp/ss-fault-injection.json','w') as f:json.dump(report,f,indent=2,sort_keys=True)
+          for name,passed in checks.items():print(('PASS' if passed else 'FAIL')+': '+name)
+          if report['overall']!='PASS':raise SystemExit('Fault-injection audit failed')
+          PY
+      - name: Upload fault-injection report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sports-south-fault-injection
+          path: /tmp/ss-fault-injection.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload consolidated audit summary
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: sports-south-consolidated-audit
-          path: /tmp/ss-audit-summary.json
+          path: /tmp/ss-audit-summary.json /tmp/ss-fault-injection.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload sanitized import-readiness report

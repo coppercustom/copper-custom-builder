@@ -4,6 +4,7 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 
 const builder = readFileSync(new URL('../copper-custom-builder.js', import.meta.url), 'utf8');
+const reportHelpers = builder.slice(builder.indexOf('const reportCss'), builder.indexOf("(function(){\n'use strict';"));
 const dashboard = readFileSync(new URL('../copper-employee-dashboard.js', import.meta.url), 'utf8');
 
 function openQuestionnaire() {
@@ -17,7 +18,7 @@ function openQuestionnaire() {
     querySelector: (selector) => selector === '#cc-content' ? content : null
   };
   const submissions = [];
-  const page = runInNewContext(builder.slice(0, builder.indexOf("back.addEventListener('click'")) + `
+  const page = runInNewContext(reportHelpers + builder.slice(builder.indexOf("(function(){\n'use strict';"), builder.indexOf("back.addEventListener('click'")) + `
     return {
       introHtml, reviewHtml, summaryText, validContact, submitConsultation,
       fillContact() {
@@ -34,7 +35,7 @@ function openQuestionnaire() {
       submissions.push(JSON.parse(options.body));
       return { ok: false, json: async () => ({ error: 'Local test response' }) };
     },
-    window: {}
+    URL, window: {}
   });
   return {
     page,
@@ -54,7 +55,7 @@ test('the questionnaire shows the flat price, both choices, and a sample preview
   assert.match(review, /Continue Without Atomic Assurance/);
   assert.match(review, /What the package covers/);
   assert.match(review, /Preview a sample report/);
-  assert.match(review, /Atomic Assurance Build Report/);
+  assert.match(review, /Build Documentation/);
   assert.match(review, /View torque documentation/);
   assert.match(review, /View witness marking photos/);
   assert.match(review, /View test-fire footage/);
@@ -91,7 +92,7 @@ test('both employee inbox scripts show the saved status and preserve legacy reco
 });
 
 test('employee reports require a request and print escaped fields and HTTPS links', () => {
-  const features = runInNewContext(builder.slice(builder.indexOf('function assuranceRequested('),
+  const features = runInNewContext(reportHelpers + builder.slice(builder.indexOf('function assuranceRequested('),
     builder.indexOf('function renderAnswers(')) +
     '\n({ assuranceRequested, assuranceLink, assuranceReportHtml })', {
     URL,
@@ -123,6 +124,7 @@ test('employee reports require a request and print escaped fields and HTTPS link
 test('staff can create and edit a report without overwriting a newer revision', async () => {
   const save = {};
   const print = {};
+  const email = {};
   const status = {};
   const listeners = new Map();
   const inputs = new Map();
@@ -131,13 +133,14 @@ test('staff can create and edit a report without overwriting a newer revision', 
     querySelector(selector) {
       if (selector === '[data-assurance-save]') return save;
       if (selector === '[data-assurance-print]') return print;
+      if (selector === '[data-assurance-email]') return email;
       if (selector === '[data-assurance-status]') return status;
       if (!inputs.has(selector)) inputs.set(selector, { value: '', validity: { valid: true } });
       return inputs.get(selector);
     },
     querySelectorAll() { return [...inputs.values()]; }
   };
-  for (const button of [save, print]) {
+  for (const button of [save, print, email]) {
     button.addEventListener = (type, listener) => { button[type] = listener; };
   }
   const panel = { querySelector: () => body, isConnected: true, dataset: {} };

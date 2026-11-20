@@ -1,26 +1,55 @@
 (function(){
+const reportCss=`
+.aa-paper{box-sizing:border-box;background:#faf7f2;color:#28221e;font:15px/1.55 Arial,sans-serif;overflow-wrap:anywhere;text-align:left}
+.aa-paper *{box-sizing:border-box}
+.aa-paper .aa-mast{background:#241b15;color:#fff5e9;padding:clamp(18px,4vw,42px)}
+.aa-paper .aa-title{margin:6px 0;font:normal clamp(24px,5vw,46px)/1.13 Georgia,serif;color:inherit}
+.aa-paper .aa-brand,.aa-paper .aa-label{display:block;font-size:11px;font-weight:bold;letter-spacing:.08em;text-transform:uppercase}
+.aa-paper .aa-brand{color:#ecc29d}
+.aa-paper .aa-label{color:#874b27}
+.aa-paper .aa-body{padding:clamp(16px,4vw,42px)}
+.aa-paper .aa-meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(115px,1fr));gap:10px 16px}
+.aa-paper .aa-section{border-top:1px solid #d9cabe;margin-top:16px;padding-top:12px}
+.aa-paper .aa-heading{font:normal 24px/1.2 Georgia,serif;margin:0 0 8px;color:inherit}
+.aa-paper .aa-line{margin:0 0 7px;white-space:pre-wrap;color:inherit}
+.aa-paper a{color:#874b27;text-decoration:underline}
+@media print{.aa-paper{print-color-adjust:exact;-webkit-print-color-adjust:exact}.aa-paper .aa-section{break-inside:avoid}#assurance-print{display:none}}
+`;
+function reportMarkup(customer,row,sample=false){
+ const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+ const date=value=>value?new Intl.DateTimeFormat('en-US',{dateStyle:'long',timeZone:'UTC'}).format(new Date(value+'T00:00:00Z')):'';
+ const line=(label,value)=>value?'<div class="aa-line"><span class="aa-label">'+label+'</span>'+esc(value)+'</div>':'';
+ const link=(label,value)=>{
+  try{
+   const url=new URL(value);
+   if(url.protocol!=='https:'||url.username||url.password)return '';
+   return '<div class="aa-line"><a href="'+esc(url.href)+'" '+(sample?'data-demo-report-link':'target="_blank" rel="noopener noreferrer"')+'>'+label+'</a>'+(sample?' (sample link)':'')+'</div>';
+  }catch{return '';}
+ };
+ const section=(title,body)=>body?'<div class="aa-section"><div class="aa-heading">'+title+'</div>'+body+'</div>':'';
+ return '<article class="aa-paper"><div class="aa-mast"><span class="aa-brand">Copper Custom Armament</span><div class="aa-title">Build Documentation</div><div>Atomic Assurance · '+(sample?'Sample pickup packet':'Customer pickup packet')+'</div></div><div class="aa-body"><div class="aa-meta">'+
+  line('Prepared for',customer)+line('Build reference',row.build_reference)+line('Pickup date',date(row.pickup_date))+'</div>'+
+  section('One-year warranty',line('Coverage period',[date(row.pickup_date),date(row.warranty_end_date)].filter(Boolean).join(' – ')))+
+  section('Assembly record',line('Inspection summary',row.inspection_summary)+link('View torque documentation',row.torque_url)+link('View witness marking photos',row.witness_url))+
+  section('Test-fire record',line('Test date',date(row.test_date))+line('Test summary',row.test_summary)+link('View test-fire footage',row.footage_url)+line('Suppressed build sound reading',row.sound_reading_db==null?'':row.sound_reading_db+' dB')+link('View test target',row.target_url))+
+  section(sample?'Sample only':'Report prepared by',sample?'<div class="aa-line">Fictional records throughout. Your pickup packet will reflect your completed build.</div>':line('Prepared by',row.prepared_by))+'</div></article>';
+}
+(function(){
 'use strict';
 var root=document.getElementById('cc-builder-v400');if(!root||root.__ready)return;root.__ready=true;
 var assuranceStyles=document.createElement('style');
-assuranceStyles.textContent=`#cc-builder-v400 .cc-welcome .cc-benefits{grid-template-columns:1fr}
-#cc-builder-v400 .cc-assurance-aside{display:grid;gap:4px;justify-items:center;width:fit-content;max-width:100%;margin:22px auto 0;padding:11px clamp(14px,4vw,32px);color:#dfcfc1;text-align:center;font-size:13px;line-height:1.55;border:1px solid #9a6e49;border-radius:7px;background:radial-gradient(ellipse at 50% 0%,#66442e 0%,#30231d 56%,#201a18 100%);box-shadow:inset 0 1px 0 #e6b58645,0 5px 20px #0004}
-#cc-builder-v400 .cc-assurance-aside strong{color:#f4c999;font:700 12px/1.35 Arial,sans-serif;letter-spacing:.15em;text-transform:uppercase}
-#cc-builder-v400 .cc-assurance-coverage{display:grid;grid-template-columns:1fr 1fr;gap:5px 20px;padding-left:20px}
+assuranceStyles.textContent=reportCss+`
+#cc-builder-v400 .cc-welcome-copy{font-size:clamp(16px,2.2vw,19px);line-height:1.6;margin-bottom:22px;max-width:58ch}
+#cc-builder-v400 .cc-welcome-inner{padding-bottom:24px}
+#cc-builder-v400 .cc-welcome-options{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+#cc-builder-v400 .cc-welcome-option{padding:14px 18px;border:1px solid #78624f;border-radius:8px;background:#241e1a;color:#f6e7da;font-size:15px}
+#cc-builder-v400 .cc-welcome-option strong{display:block;margin-bottom:4px;color:#f4c999;font-size:16px}
+#cc-builder-v400.cc-intro-mode .actions{border-top:0;background:transparent;padding-top:8px!important}
+#cc-builder-v400 .cc-documentation-package{width:100%;box-sizing:border-box;min-width:0;max-width:none}
+#cc-builder-v400 .cc-assurance-coverage{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;padding-left:22px}
 #cc-builder-v400 .cc-assurance-preview{margin:18px 0}
-#cc-builder-v400 .cc-assurance-preview summary{cursor:pointer;color:#efc99f;font-weight:700}
-#cc-builder-v400 .cc-assurance-report{margin-top:14px;background:#f9f5ee;color:#282320;border-top:5px solid #a46e45;padding:clamp(14px,4vw,36px);font-size:14px;overflow-wrap:anywhere}
-#cc-builder-v400 .cc-assurance-report header{border-bottom:1px solid #d6c5b5;padding-bottom:12px}
-#cc-builder-v400 .cc-assurance-report h3,#cc-builder-v400 .cc-assurance-report h4,#cc-builder-v400 .cc-assurance-report p{color:inherit;margin:0 0 6px}
-#cc-builder-v400 .cc-assurance-report h3{font:700 clamp(20px,4vw,30px)/1.2 Georgia,serif}
-#cc-builder-v400 .cc-assurance-report .report-brand{font-size:11px;font-weight:700;letter-spacing:.13em;color:#774d30}
-#cc-builder-v400 .cc-assurance-report .report-sample{font-size:12px;color:#695b50}
-#cc-builder-v400 .cc-assurance-report .report-meta{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;margin:14px 0 0}
-#cc-builder-v400 .cc-assurance-report dd{margin:0}
-#cc-builder-v400 .cc-assurance-report section,#cc-builder-v400 .cc-assurance-report footer{border-top:1px solid #d6c5b5;margin-top:14px;padding-top:12px}
-#cc-builder-v400 .cc-assurance-report table{border-collapse:collapse;width:100%;margin-bottom:8px;text-align:left}
-#cc-builder-v400 .cc-assurance-report th,#cc-builder-v400 .cc-assurance-report td{padding:5px;border-bottom:1px solid #e0d4c8;vertical-align:top}
-#cc-builder-v400 .cc-assurance-report a{color:#713c1d;text-decoration:underline}
-@media(max-width:580px){#cc-builder-v400 .cc-assurance-coverage{grid-template-columns:1fr}#cc-builder-v400 .cc-assurance-report table{font-size:12px}}
+#cc-builder-v400 .cc-assurance-preview summary{cursor:pointer;color:#efc99f;font-weight:700;margin-bottom:10px}
+@media(max-width:580px){#cc-builder-v400 .cc-welcome-options,#cc-builder-v400 .cc-assurance-coverage{grid-template-columns:1fr}}
 `;
 root.appendChild(assuranceStyles);
 var API='https://cyrmysbcrpiadchcpsfa.supabase.co/functions/v1/public-lipseys-search';
@@ -163,7 +192,7 @@ function shotgunTypeHtml(){
  return html;
 }
 function typeHtml(){if(state.category==='Pistol')return pistolTypeHtml();if(state.category==='Shotgun')return shotgunTypeHtml();var types=data.filters.filter(function(x){return x.field==='firearm_type';}),actions=data.filters.filter(function(x){if(x.field!=='action')return false;if(state.category!=='Rifle')return true;var n=String(x.name||'').toLowerCase().replace(/[–—-]/g,' ').replace(/[^a-z0-9]+/g,' ').trim().replace(/\s+/g,' ');return !(/\bside by side\b|\bpump(?: action)?\b|\bsingle action\b|\bda sa\b|\bdouble action single action\b|\bsingle double action\b/.test(n));});if(!state.firearmType)return heading('Choose a firearm type','Select a catalog classification.')+choices(types,'','firearmType');var html=heading('Choose an action','Select an action or continue without narrowing.');html+='<p class="help">Firearm type: '+esc(state.firearmType);if(types.length>1)html+=' · <button type="button" class="link" data-action="change-type">Change type</button>';html+='</p>'+choices(actions,state.firearmAction,'firearmAction')+'<p class="note">Action selection is optional.</p>';return html;}
-function introHtml(){return '<div class="cc-welcome"><div class="cc-welcome-glow"></div><div class="cc-welcome-inner"><p class="cc-eyebrow">COPPER CUSTOM ARMAMENT <span> / </span> PRIVATE CONSULTATION</p><h1>Your vision.<br><em>Our expertise.</em></h1><p class="cc-welcome-lead">An exceptional build begins with a conversation.</p><p class="cc-welcome-copy">Tell us what matters most to you. A dedicated Copper Custom representative will personally review your preferences and explore available options with you.</p><div class="cc-welcome-rule"></div><div class="cc-benefits"><div class="cc-benefit"><span class="cc-benefit-accent"></span><strong>Personal Guidance</strong><p>A real representative throughout your consultation</p></div></div><p class="cc-assurance-aside"><strong>'+atomicAssurance.name+'</strong><span>Build warranty and in-depth testing available</span></p></div></div>';}
+function introHtml(){return '<div class="cc-welcome"><div class="cc-welcome-glow"></div><div class="cc-welcome-inner"><p class="cc-eyebrow">COPPER CUSTOM ARMAMENT <span> / </span> PRIVATE CONSULTATION</p><h1>Your vision.<br><em>Our expertise.</em></h1><p class="cc-welcome-lead">An exceptional build begins with a conversation.</p><p class="cc-welcome-copy">Tell us what matters most to you. A dedicated Copper Custom representative will personally review your preferences and explore available options with you.</p><div class="cc-welcome-options"><div class="cc-welcome-option"><strong>Personal Guidance</strong>Work with a Copper Custom representative from your first idea through your consultation.</div><div class="cc-welcome-option cc-assurance-aside"><strong>'+atomicAssurance.name+'</strong>Optional build warranty and in-depth testing. Details are available at the end.</div></div></div></div>';}
 function goalsHtml(){var html=heading('Tell us about your ideal build','Help your representative understand your goals.');html+='<div class="section"><p class="section-label">01 · Intended Use</p><h4>What will you primarily use this for?</h4><p class="help">Select all that apply. Your build can accommodate multiple intended uses.</p>'+multiChoices(['Range & Recreation','Home Defense','Competition','Hunting & Outdoors','Professional Use','Collection & Customization','Not Sure Yet','Other'],state.purpose,'purpose')+(state.purpose.indexOf('Other')!==-1?'<div class="field interest-notes"><label for="cc-purpose-other">Describe your intended use</label><textarea id="cc-purpose-other" maxlength="2000" placeholder="Tell us how you plan to use your firearm…">'+esc(state.purposeOther)+'</textarea></div>':'')+'</div><div class="divider"></div><div class="section"><p class="section-label">02 · Budget</p><h4>What is your approximate budget?</h4><p class="help">An estimate is fine.</p>'+choices(['Under $500','$500–$1,000','$1,000–$2,000','$2,000–$3,500','$3,500+','Flexible / Need Guidance'],state.budget,'budget')+'</div><div class="divider"></div><div class="section"><p class="section-label">03 · Desired Goals</p><h4>What would you like to achieve with your build?</h4><p class="help">Tell us about your vision, priorities, or the functionality you are looking for. Please write at least 20 characters.</p><div class="field"><label for="cc-goals">Desired goals *</label><textarea id="cc-goals" maxlength="2000" placeholder="Tell us what you have in mind…">'+esc(state.goals)+'</textarea></div></div>';return html;}
 function optionalHtml(key){
  var s=state[key],optics=key==='optics';
@@ -208,27 +237,14 @@ function atomicAssuranceHtml(){
  <ul class="cc-assurance-coverage">${coverage.map(item=>'<li>'+item+'</li>').join('')}</ul>
  <p>You’ll receive your completed report at pickup.</p>
  <details class="cc-assurance-preview"><summary>Preview a sample report</summary>
- <article class="cc-assurance-report" aria-labelledby="sample-report-title">
- <header><p class="report-brand">COPPER CUSTOM ARMAMENT</p><h3 id="sample-report-title">Atomic Assurance Build Report</h3><p class="report-sample">Sample report · Fictional customer and results</p></header>
- <dl class="report-meta">
- <div><dt>Report ID</dt><dd>AA-2026-0142</dd></div>
- <div><dt>Prepared for</dt><dd>Jordan Bennett</dd></div>
- <div><dt>Build reference</dt><dd>CC-261142 · Suppressed build</dd></div>
- <div><dt>Pickup date</dt><dd>November 20, 2026</dd></div>
- </dl>
- <section><h4>Warranty</h4><p><strong>Coverage period</strong> · November 20, 2026 to November 20, 2027</p><p>One-year build warranty entered at pickup. Refer to the signed warranty agreement for coverage terms.</p></section>
- <section><h4>Assembly and inspection record</h4>
- <table><thead><tr><th scope="col">Record</th><th scope="col">Result</th><th scope="col">Reference</th></tr></thead><tbody>
- <tr><td>Torque documentation</td><td>Recorded and verified</td><td>AA-0142-A<br><a href="https://example.invalid/atomic-assurance/AA-2026-0142/torque-documentation" data-demo-report-link>View torque documentation</a> <span class="report-sample">(sample link)</span></td></tr>
- <tr><td>Witness marking</td><td>Verified and photographed</td><td>AA-0142-W<br><a href="https://example.invalid/atomic-assurance/AA-2026-0142/witness-marking-photos" data-demo-report-link>View witness marking photos</a> <span class="report-sample">(sample link)</span></td></tr>
- </tbody></table>
- <p>Reviewed November 19, 2026 by Casey Morgan, build technician.</p></section>
- <section><h4>Test-fire and target record</h4><p><strong>Test date</strong> · November 19, 2026</p><p><strong>Result</strong> · Function check completed and signed off.</p>
- <p><strong>Target</strong> · T-0142 · Printed target included with the pickup packet.</p>
- <p><a href="https://example.invalid/atomic-assurance/AA-2026-0142/test-fire" data-demo-report-link>View test-fire footage</a> <span class="report-sample">(sample link)</span></p></section>
- <section><h4>Suppressed sound reading</h4><p><strong>Peak sound level</strong> · 136.8 dB (illustrative)</p><p><strong>Measurement record</strong> · SPL-0142 · Logged with the test record on November 19, 2026.</p></section>
- <footer><strong>Reviewed by Avery Ellis</strong><br>Quality review completed November 20, 2026</footer>
- </article></details>`+
+ ${reportMarkup('Jordan Ellis',{
+  build_reference:'CCA-DEMO-014',pickup_date:'2026-11-14',warranty_end_date:'2027-11-14',
+  inspection_summary:'Assembly and witness marking records reviewed.',
+  test_date:'2026-11-13',test_summary:'Function check completed and signed off.',
+  sound_reading_db:137,torque_url:'https://example.invalid/torque',
+  witness_url:'https://example.invalid/witness',footage_url:'https://example.invalid/footage',
+  target_url:'https://example.invalid/target'
+ },true)}</details>`+
  '<label class="check-row"><input type="radio" name="cc-atomic-assurance" value="requested" required'+(contact.atomicAssuranceRequested===true?' checked':'')+'><span>Add '+atomicAssurance.name+' — '+atomicAssurancePrice+'</span></label>'+
  '<label class="check-row"><input type="radio" name="cc-atomic-assurance" value="declined" required'+(contact.atomicAssuranceRequested===false?' checked':'')+'><span>Continue Without '+atomicAssurance.name+'</span></label>'+
  '<p>Selecting '+atomicAssurance.name+' adds it to your consultation request. Your Copper Custom representative will arrange payment directly and confirm warranty terms.</p></fieldset>';
@@ -447,19 +463,9 @@ function assuranceInput([key,label,type,max],value){
  return '<div><label for="'+id+'">'+label+'</label>'+input+'</div>';
 }
 function assuranceReportHtml(consultation,row){
- const fields=assuranceFields.map(([key,label,type])=>{
-  const value=row[key];
-  if(value===null||value===undefined||value==='')return '';
-  const url=type==='url'?assuranceLink(value):'';
-  const detail=url?'<a href="'+escape(url)+'" target="_blank" rel="noopener noreferrer">'+escape(label)+'</a>':
-   type==='url'?'':escape(value)+(type==='number'?' dB':'');
-  return detail?'<dt>'+escape(label)+'</dt><dd>'+detail+'</dd>':'';
- }).join('');
- return '<!doctype html><html lang="en"><meta charset="utf-8"><title>Atomic Assurance Build Report</title>'+
-  '<style>body{max-width:760px;margin:32px auto;padding:0 16px;font:15px/1.5 system-ui;color:#25211e}header{border-bottom:2px solid #996946}dt{font-weight:700;margin-top:12px}dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}@media print{button{display:none}}</style>'+
-  '<header><p>COPPER CUSTOM ARMAMENT</p><h1>Atomic Assurance Build Report</h1></header>'+
-  '<p>Prepared for '+escape(consultation.customer_name)+'<br>Consultation '+escape(consultation.id)+'</p>'+
-  '<dl>'+fields+'</dl><button type="button" id="assurance-print">Print / Save as PDF</button></html>';
+ return '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Atomic Assurance Build Report</title>'+
+  '<style>'+reportCss+'body{margin:0 auto;max-width:780px}#assurance-print{margin:18px;padding:10px 14px}</style>'+
+  reportMarkup(consultation.customer_name,row)+'<button type="button" id="assurance-print">Print / Save as PDF</button></html>';
 }
 async function openAssuranceEditor(consultation){
  const panel=$('cc-assurance-editor');
@@ -481,14 +487,16 @@ async function openAssuranceEditor(consultation){
  body.innerHTML='<p class="muted">Paste HTTPS sharing links for files hosted in Dropbox or another service. Confirm the customer can open each link before sharing the report.</p>'+
   assuranceFields.map(field=>assuranceInput(field,saved?.[field[0]]??'')).join('')+
   '<div class="row" style="margin-top:12px"><button type="button" data-assurance-save>Save report</button>'+
-  '<button type="button" class="secondary" data-assurance-print>Preview / print report</button></div>'+
+  '<button type="button" class="secondary" data-assurance-print>Preview / print report</button>'+
+  '<button type="button" class="secondary" data-assurance-email>Email Atomic Assurance Report</button></div>'+
   '<p role="status" data-assurance-status></p>';
  const status=body.querySelector('[data-assurance-status]');
  const save=body.querySelector('[data-assurance-save]');
  const print=body.querySelector('[data-assurance-print]');
- print.disabled=!saved;
+ const email=body.querySelector('[data-assurance-email]');
+ print.disabled=email.disabled=!saved;
  body.addEventListener('input',()=>{
-  panel.dataset.dirty='true';print.disabled=true;status.textContent='Unsaved changes';
+  panel.dataset.dirty='true';print.disabled=email.disabled=true;status.textContent='Unsaved changes';
  });
  save.addEventListener('click',async ()=>{
   const values={};
@@ -516,12 +524,25 @@ async function openAssuranceEditor(consultation){
    if(!rows?.length)throw Error('Another employee changed this report. Copy your edits before reopening the consultation.');
    saved=rows[0];
    panel.dataset.dirty='false';
-   print.disabled=false;status.textContent='Report saved.';
+   print.disabled=email.disabled=false;status.textContent='Report saved.';
   }catch(error){
    status.textContent=error.status===409?'Another employee already created this report. Copy your edits before reopening the consultation.':'Report was not saved. '+error.message;
   }finally{
    save.disabled=false;inputs.forEach(input=>input.disabled=false);
   }
+ });
+ email.addEventListener('click',async ()=>{
+  if(!saved||panel.dataset.dirty==='true'||email.disabled)return;
+  if(!window.confirm('Are you sure the report is ready to be sent to the customer?\n\n'+consultation.customer_email))return;
+  email.disabled=true;status.textContent='Sending report…';
+  try{
+   const result=await authorizedRequest('/functions/v1/email-atomic-assurance',{
+    method:'POST',body:{id:consultation.id,revision:saved.revision}
+   });
+   if(!result?.success)throw Error('Delivery was not confirmed.');
+   status.textContent='Report emailed to '+consultation.customer_email+'.';
+  }catch(error){status.textContent='Email failed. '+error.message;}
+  finally{email.disabled=panel.dataset.dirty==='true';}
  });
  print.addEventListener('click',()=>{
   if(!saved||panel.dataset.dirty==='true')return;
@@ -861,10 +882,11 @@ $('cc-cat-add').addEventListener('click',async e=>{
  (function(){
   const oldPanel=$('cc-cat-manage-results').parentElement;
   oldPanel.style.display='none'; // Keep existing event targets intact; replace the two UIs with one.
-  const panel=document.createElement('div');
-  panel.className='card';panel.style.marginTop='20px';
+  const existing=$('cc-remove-results')?.closest('.card');
+  const panel=existing||document.createElement('div');
+  if(!existing){panel.className='card';panel.style.marginTop='20px';
   panel.innerHTML='<h3>Remove listing</h3><p class="muted">Search employee-added and supplier-backed listings together. Removal hides the selected listing without deleting supplier data. You can restore removed listings.</p><div class="row"><select id="cc-remove-category" aria-label="Catalog category"><option value="Firearm">Firearms</option><option value="Light">Lights</option><option value="Optic">Optics (custom)</option><option value="Suppressor">Suppressors (custom)</option></select><input class="grow" id="cc-remove-search" type="search" placeholder="Search manufacturer or model"><select id="cc-remove-filter" aria-label="Visibility"><option value="active">Active</option><option value="removed">Removed</option><option value="all">All</option></select><button type="button" class="secondary" id="cc-remove-refresh">Search</button></div><p id="cc-remove-status" class="muted" role="status">Search for a model or manufacturer to manage listings.</p><div id="cc-remove-results"></div>';
-  oldPanel.insertAdjacentElement('afterend',panel);
+  oldPanel.insertAdjacentElement('afterend',panel);}
   const el=id=>panel.querySelector('#'+id);
   let results=[],exclusions=[],sequence=0,timer=null;
   const key=v=>String(v||'').toLowerCase().replace(/[^a-z0-9]/g,'');
@@ -1038,5 +1060,6 @@ $('cc-detail').addEventListener('click',async e=>{
    const user=await authorizedRequest('/auth/v1/user');currentUser=user;await load();show(true);
   }else show(false);
  }catch(e){saveSession(null);currentUser=null;show(false);message('Please sign in. '+e.message,true);}
+})();
 })();
 })();

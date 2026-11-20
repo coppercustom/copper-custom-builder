@@ -44,7 +44,9 @@ function openQuestionnaire() {
 
 test('the questionnaire shows the flat price, both choices, and a sample preview', () => {
   const { page } = openQuestionnaire();
-  assert.match(page.introHtml(), /Atomic Assurance — \$100/);
+  const intro = page.introHtml();
+  assert.match(intro, /Atomic Assurance/);
+  assert.doesNotMatch(intro, /\$100|Add Atomic Assurance|Continue Without Atomic Assurance|Preview a sample report|cc-atomic-assurance/);
   const review = page.reviewHtml();
   assert.match(review, /Atomic Assurance — \$100/);
   assert.match(review, /Add Atomic Assurance — \$100/);

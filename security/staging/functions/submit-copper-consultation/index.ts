@@ -229,24 +229,30 @@ async function sendConsultationEmail(details: {
   if (Deno.env.get('SEND_CUSTOMER_CONSULTATION_SUMMARY') === 'true' &&
       singleMailbox.test(recipient) && recipient.split('@')[0].length <= 64) {
     const customerBody = [
-      'Thanks for contacting Copper Custom. We received your consultation request.',
+      'Thank you for reaching out to Copper Custom. We’ve received your consultation request and look forward to hearing more about what you have in mind.',
+      '',
+      'A member of our team will review the details you shared and follow up using your preferred contact method. For your records, we’ve included a copy of your submission below.',
       '',
       `Reference: ${details.reference}`,
       `Build category: ${details.weaponClass}`,
       `Preferred contact method: ${details.method}`,
       '',
-      'Your submitted answers',
+      'Your consultation details',
       '------------------------------',
       formatSummary(details.answers),
       '',
-      'Reply to this email if you have any changes or questions.',
-      'If you did not submit this request, you can disregard this message.'
+      'If anything changes or you’d like to add a detail, simply reply to this email. We’ll include it in your consultation.',
+      '',
+      'Best regards,',
+      'The Copper Custom Team',
+      '',
+      'If you didn’t submit this request, you can disregard this email.'
     ].join('\r\n');
     const customerMessage = [
       `From: Copper Custom <${SENDER}>`,
       `To: ${recipient}`,
       `Reply-To: ${SENDER}`,
-      `Subject: ${safeHeader(`Copper Custom received your consultation - ${details.reference}`)}`,
+      'Subject: Your Copper Custom consultation',
       'MIME-Version: 1.0',
       'Content-Type: text/plain; charset="UTF-8"',
       '',

@@ -231,7 +231,7 @@ async function sendConsultationEmail(details: {
     const customerBody = [
       'Thank you for reaching out to Copper Custom. We’ve received your consultation request and look forward to hearing more about what you have in mind.',
       '',
-      'A member of our team will review the details you shared and follow up using your preferred contact method. For your records, we’ve included a copy of your submission below.',
+      'Your Copper Custom representative will review the details you shared and follow up with you soon using your preferred contact method. For your records, we’ve included a copy of your submission below.',
       '',
       `Reference: ${details.reference}`,
       `Build category: ${details.weaponClass}`,

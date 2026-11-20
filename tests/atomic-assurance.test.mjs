@@ -13,6 +13,7 @@ function openQuestionnaire() {
     addEventListener: (type, listener) => { events[type] = listener; }
   };
   const root = {
+    appendChild() {},
     querySelector: (selector) => selector === '#cc-content' ? content : null
   };
   const submissions = [];
@@ -28,7 +29,7 @@ function openQuestionnaire() {
       }
     };
   })();`, {
-    document: { getElementById: () => root, addEventListener() {} },
+    document: { createElement: () => ({}), getElementById: () => root, addEventListener() {} },
     fetch: async (_url, options) => {
       submissions.push(JSON.parse(options.body));
       return { ok: false, json: async () => ({ error: 'Local test response' }) };
@@ -45,13 +46,18 @@ function openQuestionnaire() {
 test('the questionnaire shows the flat price, both choices, and a sample preview', () => {
   const { page } = openQuestionnaire();
   const intro = page.introHtml();
-  assert.match(intro, /Atomic Assurance/);
+  assert.match(intro, /cc-assurance-aside"><strong>Atomic Assurance/);
   assert.doesNotMatch(intro, /\$100|Add Atomic Assurance|Continue Without Atomic Assurance|Preview a sample report|cc-atomic-assurance/);
   const review = page.reviewHtml();
   assert.match(review, /Atomic Assurance — \$100/);
   assert.match(review, /Add Atomic Assurance — \$100/);
   assert.match(review, /Continue Without Atomic Assurance/);
+  assert.match(review, /What the package covers/);
   assert.match(review, /Preview a sample report/);
+  assert.match(review, /Atomic Assurance Build Report/);
+  assert.match(review, /View torque documentation/);
+  assert.match(review, /View witness marking photos/);
+  assert.match(review, /View test-fire footage/);
   assert.match(review, /representative will arrange payment directly/);
   page.fillContact();
   assert.match(page.validContact(), /Please choose whether to add Atomic Assurance/);

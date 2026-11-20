@@ -4,6 +4,6 @@ Atomic Assurance is an optional consultation add-on at a flat $100 USD. The Open
 
 Change the amount and currency in the `atomicAssurance` configuration in `copper-custom-builder.js`. The submitted `answers.documentation_package_requested` flag records the choice. The first row in `answers.summary` records the customer-facing status and the price shown when a request was made. The existing notification and recap formatters read that summary. The employee inbox shows the status on the consultation card, and the existing answers view and print report include the summary row. Older records without that row continue to render without an Atomic Assurance status.
 
-The built-in sample preview works without a PDF. OpenCart pages that already provide the sample PDF in the `cc-documentation-sample` element also show a download link.
+The inline sample report contains fictional records. Its three sample links are illustrative and stay on the current page.
 
 Run `node --test tests/atomic-assurance.test.mjs` to verify the choices, submission data, and inbox display locally. During an approved rollout, check both choices through the hosted questionnaire and verify the saved record and notification.

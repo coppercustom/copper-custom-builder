@@ -347,6 +347,28 @@ host.setAttribute('data-js-running','true');
 const $=id=>host.querySelector('#'+id);
 const statuses=['New','Contacted','In Review','Quoted','Closed'];
 let session=null,currentUser=null,staff=[],records=[],selected=null;
+let viewingTrash=false, inboxBusy=false;
+const inboxHeading=$('cc-list-count').parentElement;
+const inboxLabel=document.createTextNode('Consultation inbox ');
+inboxHeading.replaceChildren(inboxLabel,$('cc-list-count'));
+const trashToggle=document.createElement('button');
+trashToggle.type='button';
+trashToggle.className='secondary';
+trashToggle.textContent='Trash';
+$('cc-refresh').after(trashToggle);
+
+function clearConsultation(){
+ selected=null;
+ delete $('cc-detail').dataset.consultationId;
+ $('cc-detail').innerHTML='<p>Select a consultation to review.</p>';
+}
+function setInboxBusy(busy){
+ inboxBusy=busy;
+ trashToggle.disabled=busy;
+ $('cc-refresh').disabled=busy;
+ $('cc-list').inert=busy;
+ $('cc-detail').inert=busy;
+}
 const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function message(s,bad=false){$('cc-msg').innerHTML=s?'<p class="'+(bad?'err':'ok')+'">'+escape(s)+'</p>':'';}
 function show(logged){$('cc-login').classList.toggle('hidden',logged);$('cc-main').classList.toggle('hidden',!logged);$('cc-signout').classList.toggle('hidden',!logged);}
@@ -372,20 +394,144 @@ async function authorizedRequest(path,options={}){
  try{return await request(path,options)}catch(e){if(e.status===401){await refreshSession();return await request(path,options)}throw e;}
 }
 function table(name,query=''){return '/rest/v1/'+name+(query?'?'+query:'')}
-async function load(){
+async function load(trash=viewingTrash){
+ const userId=currentUser?.id;
  const [s,c]=await Promise.all([
   authorizedRequest(table('cc_staff','select=user_id,display_name&active=eq.true')),
-  authorizedRequest(table('cc_consultations','select=*&order=created_at.desc&limit=250'))
+  authorizedRequest(table('cc_consultations','select=*&trashed_at='+(trash?'not.is.null&order=trashed_at.desc':'is.null&order=created_at.desc')+'&limit=250'))
  ]);
- staff=s||[];
- if(!staff.some(x=>x.user_id===currentUser?.id))throw Error('This account is not authorized as an active employee.');
- records=c||[];render();
+ if(!userId||currentUser?.id!==userId)throw Error('Please sign in again.');
+ if(!s?.some(x=>x.user_id===userId))throw Error('This account is not authorized as an active employee.');
+ staff=s;
+ if(viewingTrash!==trash || !c?.some(r=>r.id===selected))clearConsultation();
+ viewingTrash=trash;
+ records=c||[];
+ render();
+}
+function assuranceRequested(answers){
+ if(typeof answers==='string'){try{answers=JSON.parse(answers)}catch{return false;}}
+ return answers?.documentation_package_requested===true;
 }
 function atomicAssuranceInbox(answers){
  if(typeof answers==='string'){try{answers=JSON.parse(answers)}catch{return '';}}
  const status=Array.isArray(answers?.summary)?answers.summary.find(row=>row?.label==='Atomic Assurance')?.value:null;
  return typeof status==='string'?'<br><strong>Atomic Assurance: '+escape(status)+'</strong>':'';
 }
+
+const assuranceFields=[
+ ['build_reference','Build reference','text',120],
+ ['prepared_by','Prepared by','text',120],
+ ['pickup_date','Pickup / warranty start date','date'],
+ ['warranty_end_date','Warranty end date','date'],
+ ['test_date','Test date','date'],
+ ['inspection_summary','Inspection summary','textarea',2000],
+ ['test_summary','Test summary','textarea',2000],
+ ['sound_reading_db','Sound reading in dB (suppressed builds)','number'],
+ ['torque_url','Torque documentation link','url',2048],
+ ['witness_url','Witness marking photos link','url',2048],
+ ['footage_url','Test-fire footage link','url',2048],
+ ['target_url','Test target link','url',2048]
+];
+function assuranceLink(value){
+ try{
+  const url=new URL(value);
+  return url.protocol==='https:'&&!url.username&&!url.password&&/^https:\/\/\S+$/i.test(value)?url.href:'';
+ }catch{return '';}
+}
+function assuranceInput([key,label,type,max],value){
+ const id='cc-assurance-'+key;
+ const input=type==='textarea'
+  ?'<textarea id="'+id+'" maxlength="'+max+'" rows="3">'+escape(value)+'</textarea>'
+  :'<input id="'+id+'" type="'+type+'" value="'+escape(value)+'"'+(max?' maxlength="'+max+'"':'')+
+   (type==='number'?' min="0" max="250" step="any"':'')+'>';
+ return '<div><label for="'+id+'">'+label+'</label>'+input+'</div>';
+}
+function assuranceReportHtml(consultation,row){
+ const fields=assuranceFields.map(([key,label,type])=>{
+  const value=row[key];
+  if(value===null||value===undefined||value==='')return '';
+  const url=type==='url'?assuranceLink(value):'';
+  const detail=url?'<a href="'+escape(url)+'" target="_blank" rel="noopener noreferrer">'+escape(label)+'</a>':
+   type==='url'?'':escape(value)+(type==='number'?' dB':'');
+  return detail?'<dt>'+escape(label)+'</dt><dd>'+detail+'</dd>':'';
+ }).join('');
+ return '<!doctype html><html lang="en"><meta charset="utf-8"><title>Atomic Assurance Build Report</title>'+
+  '<style>body{max-width:760px;margin:32px auto;padding:0 16px;font:15px/1.5 system-ui;color:#25211e}header{border-bottom:2px solid #996946}dt{font-weight:700;margin-top:12px}dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}@media print{button{display:none}}</style>'+
+  '<header><p>COPPER CUSTOM ARMAMENT</p><h1>Atomic Assurance Build Report</h1></header>'+
+  '<p>Prepared for '+escape(consultation.customer_name)+'<br>Consultation '+escape(consultation.id)+'</p>'+
+  '<dl>'+fields+'</dl><button type="button" id="assurance-print">Print / Save as PDF</button></html>';
+}
+async function openAssuranceEditor(consultation){
+ const panel=$('cc-assurance-editor');
+ const body=panel.querySelector('[data-assurance-body]');
+ const path=table('cc_atomic_assurance_reports','consultation_id=eq.'+encodeURIComponent(consultation.id));
+ body.textContent='Loading report…';
+ let saved;
+ try{
+  const rows=await authorizedRequest(path+'&select=*');
+  saved=rows[0];
+ }catch(error){
+  body.textContent='Report unavailable: '+error.message;
+  const retry=document.createElement('button');
+  retry.type='button';retry.textContent='Retry';retry.addEventListener('click',()=>openAssuranceEditor(consultation));
+  body.appendChild(retry);
+  return;
+ }
+ if(!panel.isConnected)return;
+ body.innerHTML='<p class="muted">Paste HTTPS sharing links for files hosted in Dropbox or another service. Confirm the customer can open each link before sharing the report.</p>'+
+  assuranceFields.map(field=>assuranceInput(field,saved?.[field[0]]??'')).join('')+
+  '<div class="row" style="margin-top:12px"><button type="button" data-assurance-save>Save report</button>'+
+  '<button type="button" class="secondary" data-assurance-print>Preview / print report</button></div>'+
+  '<p role="status" data-assurance-status></p>';
+ const status=body.querySelector('[data-assurance-status]');
+ const save=body.querySelector('[data-assurance-save]');
+ const print=body.querySelector('[data-assurance-print]');
+ print.disabled=!saved;
+ body.addEventListener('input',()=>{
+  panel.dataset.dirty='true';print.disabled=true;status.textContent='Unsaved changes';
+ });
+ save.addEventListener('click',async ()=>{
+  const values={};
+  for(const [key,label,type] of assuranceFields){
+   const input=body.querySelector('#cc-assurance-'+key);
+   const value=input.value.trim();
+   if(!input.validity.valid||(type==='url'&&value&&!assuranceLink(value))){
+    status.textContent='Check '+label.toLowerCase()+'. Use a valid HTTPS sharing link for attachments.';
+    input.focus();return;
+   }
+   values[key]=type==='number'?(value?Number(value):null):type==='date'?(value||null):
+    type==='url'&&value?assuranceLink(value):value;
+  }
+  if(values.pickup_date&&values.warranty_end_date&&values.warranty_end_date<values.pickup_date){
+   status.textContent='Warranty end date must be on or after the pickup date.';return;
+  }
+  const inputs=Array.from(body.querySelectorAll('input, textarea'));
+  save.disabled=true;inputs.forEach(input=>input.disabled=true);
+  status.textContent='Saving…';
+  try{
+   const options={headers:{Prefer:'return=representation'}};
+   const rows=saved
+    ?await authorizedRequest(path+'&revision=eq.'+saved.revision,{...options,method:'PATCH',body:{...values,revision:saved.revision+1}})
+    :await authorizedRequest(table('cc_atomic_assurance_reports'),{...options,method:'POST',body:{...values,consultation_id:consultation.id}});
+   if(!rows?.length)throw Error('Another employee changed this report. Copy your edits before reopening the consultation.');
+   saved=rows[0];
+   panel.dataset.dirty='false';
+   print.disabled=false;status.textContent='Report saved.';
+  }catch(error){
+   status.textContent=error.status===409?'Another employee already created this report. Copy your edits before reopening the consultation.':'Report was not saved. '+error.message;
+  }finally{
+   save.disabled=false;inputs.forEach(input=>input.disabled=false);
+  }
+ });
+ print.addEventListener('click',()=>{
+  if(!saved||panel.dataset.dirty==='true')return;
+  const report=window.open('','_blank');
+  if(!report){status.textContent='Allow pop-ups to open the report.';return;}
+  report.opener=null;report.document.open();report.document.write(assuranceReportHtml(consultation,saved));report.document.close();
+  report.document.getElementById('assurance-print').addEventListener('click',()=>report.print());
+ });
+}
+
 function renderAnswers(answers){
  let a=answers;if(typeof a==='string'){try{a=JSON.parse(a)}catch(e){return '<div class="answer-card"><div class="answer-value">'+escape(a)+'</div></div>'}}
  let entries=[];
@@ -399,7 +545,7 @@ function consultationHasUnsavedChanges(){
  const r=records.find(x=>x.id===selected);
  if(!r||!$('cc-status')||!$('cc-handler'))return false;
  if($('cc-status').value!==String(r.status||'')||$('cc-handler').value.trim()!==String(r.handled_by||'').trim())return true;
- if(($('cc-note-text')?.value||'').trim())return true;
+ if(($('cc-note-text')?.value||'').trim()||$('cc-assurance-editor')?.dataset.dirty==='true')return true;
  return [...$('cc-detail').querySelectorAll('[data-note-id]')].some(card=>{
   const editor=card.querySelector('.note-edit');
   return editor&&!editor.classList.contains('hidden')&&card.querySelector('[data-note-text]').value!==card.querySelector('.cc-note-display').textContent;
@@ -410,17 +556,33 @@ function confirmConsultationLeave(){
 }
 window.addEventListener('beforeunload',e=>{if(consultationHasUnsavedChanges()){e.preventDefault();e.returnValue='';}});
 function render(){
+ inboxLabel.data=viewingTrash?'Consultation trash ':'Consultation inbox ';
+ trashToggle.textContent=viewingTrash?'Back to inbox':'Trash';
+ $('cc-stats').classList.toggle('hidden',viewingTrash);
  $('cc-stats').innerHTML=statuses.map(name=>'<button type="button" class="card metric cc-status-filter" data-status="'+escape(name)+'" aria-pressed="'+String($('cc-filter').value===name)+'" title="Filter consultations by '+escape(name)+'"><strong>'+records.filter(r=>r.status===name).length+'</strong><span class="pill" data-status="'+escape(name)+'">'+escape(name)+'</span></button>').join('');
  const q=$('cc-search').value.toLowerCase().trim(),f=$('cc-filter').value,assignment=$('cc-assignment-filter').value;
  const shown=records.filter(r=>(!f||r.status===f)&&(!assignment||(assignment==='assigned'?!!String(r.handled_by||'').trim():!String(r.handled_by||'').trim()))&&(!q||[r.customer_name,r.customer_email,r.id,r.weapon_class,r.handled_by].some(v=>String(v||'').toLowerCase().includes(q))));
  $('cc-list-count').textContent='('+shown.length+' of '+records.length+')';
- $('cc-list').innerHTML=shown.length?shown.map(r=>'<button type="button" class="item'+(selected===r.id?' selected':'')+'" data-id="'+escape(r.id)+'" data-status="'+escape(r.status)+'"><span class="pill" data-status="'+escape(r.status)+'">'+escape(r.status)+'</span> <strong>'+escape(r.customer_name)+'</strong><br><span class="muted">'+escape(r.weapon_class||'Consultation')+' · '+escape(new Date(r.created_at).toLocaleDateString())+'</span><br><span class="assignment-label'+(r.handled_by?'':' unassigned')+'">'+(r.handled_by?'Assigned: '+escape(r.handled_by):'Unassigned')+'</span>'+atomicAssuranceInbox(r.answers)+'</button>').join(''):'<p>No matching consultations.</p>';
+ $('cc-list').innerHTML=shown.length?shown.map(r=>'<button type="button" class="item'+(selected===r.id?' selected':'')+'" data-id="'+escape(r.id)+'" data-status="'+escape(r.status)+'"><span class="pill" data-status="'+escape(r.status)+'">'+escape(r.status)+'</span> <strong>'+escape(r.customer_name)+'</strong><br><span class="muted">'+escape(r.weapon_class||'Consultation')+' · '+escape(new Date(r.created_at).toLocaleDateString())+'</span><br><span class="assignment-label'+(r.handled_by?'':' unassigned')+'">'+(r.handled_by?'Assigned: '+escape(r.handled_by):'Unassigned')+'</span>'+atomicAssuranceInbox(r.answers)+'</button>').join(''):(viewingTrash?'<p>No matching consultations in Trash.</p>':'<p>No matching consultations.</p>');
  if(selected){const r=records.find(x=>x.id===selected);if(r&&$('cc-detail').dataset.consultationId!==String(r.id))renderDetail(r);else if(!r) $('cc-detail').innerHTML='<p>Select a consultation to review.</p>';}
 }
 async function renderDetail(r){
  const stamp=selected=r.id;
  $('cc-detail').dataset.consultationId=String(r.id);
- $('cc-detail').innerHTML='<h3>'+escape(r.customer_name)+'</h3><p>'+escape(r.customer_email)+' '+escape(r.customer_phone||'')+'</p><p class="muted">'+escape(r.id)+' · '+escape(new Date(r.created_at).toLocaleString())+'</p><div class="row"><div class="grow"><label>Status</label><select id="cc-status">'+statuses.map(s=>'<option value="'+escape(s)+'" '+(s===r.status?'selected':'')+'>'+escape(s)+'</option>').join('')+'</select></div><div class="grow"><label>Handled by</label><input id="cc-handler" type="text" maxlength="120" autocomplete="off" placeholder="Enter employee name" value="'+escape(r.handled_by||'')+'"></div></div><div class="cc-detail-actions"><button type="button" class="secondary" id="cc-print-report">Print report</button><button type="button" id="cc-save-top">Save consultation changes</button><span class="muted">Status and assigned employee</span></div><h3 style="margin-top:20px">Customer answers</h3><div id="cc-answer-grid" class="answers">'+renderAnswers(r.answers)+'</div><div style="margin-top:20px"><button type="button" id="cc-show-supplier-links" class="secondary" aria-expanded="false">See supplier listings ▾</button><div id="cc-supplier-links" class="card hidden" style="margin-top:10px"></div></div><h3 style="margin-top:20px">Internal notes</h3><div id="cc-notes">Loading…</div><label>New internal note</label><textarea id="cc-note-text" rows="3" placeholder="Employee-only note"></textarea><div style="margin-top:10px"><button type="button" id="cc-add-note">Add note</button></div><div style="margin-top:24px;padding-top:18px;border-top:1px solid #414044"><button type="button" id="cc-save">Save Changes</button><span id="cc-save-status" role="status" class="muted" style="margin-left:12px"></span></div>';
+ if(viewingTrash){
+  $('cc-detail').innerHTML='<h3>'+escape(r.customer_name)+'</h3><p>'+escape(r.customer_email)+'</p><p class="muted">'+escape(r.status)+' · Moved to Trash '+escape(new Date(r.trashed_at).toLocaleString())+'</p><button type="button" id="cc-trash-action">Restore to inbox</button>';
+  return;
+ }
+ $('cc-detail').innerHTML='<h3>'+escape(r.customer_name)+'</h3><p>'+escape(r.customer_email)+' '+escape(r.customer_phone||'')+'</p><p class="muted">'+escape(r.id)+' · '+escape(new Date(r.created_at).toLocaleString())+'</p><div class="row"><div class="grow"><label>Status</label><select id="cc-status">'+statuses.map(s=>'<option value="'+escape(s)+'" '+(s===r.status?'selected':'')+'>'+escape(s)+'</option>').join('')+'</select></div><div class="grow"><label>Handled by</label><input id="cc-handler" type="text" maxlength="120" autocomplete="off" placeholder="Enter employee name" value="'+escape(r.handled_by||'')+'"></div></div><div class="cc-detail-actions"><button type="button" class="secondary" id="cc-print-report">Print report</button><button type="button" class="secondary" id="cc-trash-action">Move to Trash</button><button type="button" id="cc-save-top">Save consultation changes</button><span class="muted">Status and assigned employee</span></div><h3 style="margin-top:20px">Customer answers</h3><div id="cc-answer-grid" class="answers">'+renderAnswers(r.answers)+'</div><div style="margin-top:20px"><button type="button" id="cc-show-supplier-links" class="secondary" aria-expanded="false">See supplier listings ▾</button><div id="cc-supplier-links" class="card hidden" style="margin-top:10px"></div></div><h3 style="margin-top:20px">Internal notes</h3><div id="cc-notes">Loading…</div><label>New internal note</label><textarea id="cc-note-text" rows="3" placeholder="Employee-only note"></textarea><div style="margin-top:10px"><button type="button" id="cc-add-note">Add note</button></div><div style="margin-top:24px;padding-top:18px;border-top:1px solid #414044"><button type="button" id="cc-save">Save Changes</button><span id="cc-save-status" role="status" class="muted" style="margin-left:12px"></span></div>';
+ if(assuranceRequested(r.answers)){
+  const panel=document.createElement('details');
+  panel.id='cc-assurance-editor';
+  panel.className='card';
+  panel.style.marginTop='20px';
+  panel.innerHTML='<summary style="cursor:pointer;font-weight:700">Atomic Assurance Build Report</summary><div data-assurance-body></div>';
+  $('cc-answer-grid').after(panel);
+  panel.addEventListener('toggle',()=>{if(panel.open)void openAssuranceEditor(r);},{once:true});
+ }
  try{
  const notes=await authorizedRequest(table('cc_consultation_notes','select=id,note,created_at,updated_at,author_id&consultation_id=eq.'+encodeURIComponent(r.id)+'&order=created_at.desc'));
  if(selected!==stamp)return;
@@ -485,7 +647,7 @@ $('cc-login-button').addEventListener('click',signIn);
 $('cc-password').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();e.stopPropagation();signIn(e);}});
 $('cc-email').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();e.stopPropagation();$('cc-password').focus();}});
 $('cc-signout').type='button';
-$('cc-signout').addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();if(!confirmConsultationLeave())return;const token=session?.access_token;saveSession(null);currentUser=null;records=[];selected=null;show(false);message('Signed out.');if(token)try{await fetch(BASE+'/auth/v1/logout',{method:'POST',headers:{apikey:KEY,Authorization:'Bearer '+token}})}catch(_){}});
+$('cc-signout').addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();if(inboxBusy||!confirmConsultationLeave())return;const token=session?.access_token;saveSession(null);currentUser=null;records=[];viewingTrash=false;clearConsultation();render();show(false);message('Signed out.');if(token)try{await fetch(BASE+'/auth/v1/logout',{method:'POST',headers:{apikey:KEY,Authorization:'Bearer '+token}})}catch(_){}});
 const CATALOG_API=BASE+'/functions/v1/public-lipseys-search';
 let catalogMakerNames=[],catalogMakerRequest=0,catalogMakerCache=new Map();
 function catalogStatus(s,bad=false){$('cc-cat-result').innerHTML='<p class="'+(bad?'err':'ok')+'">'+escape(s)+'</p>';}
@@ -766,13 +928,50 @@ $('cc-cat-add').addEventListener('click',async e=>{
  })();
 
 $('cc-refresh').type='button';
-$('cc-refresh').addEventListener('click',async e=>{e.preventDefault();if(!confirmConsultationLeave())return;try{await load();message('Updated.')}catch(err){message(err.message,true)}});
+trashToggle.addEventListener('click',async ()=>{
+ if(inboxBusy||!confirmConsultationLeave())return;
+ setInboxBusy(true);
+ try{
+  await load(!viewingTrash);
+  message('');
+ }catch(err){message(err.message,true);}
+ finally{setInboxBusy(false);trashToggle.focus();}
+});
+$('cc-refresh').addEventListener('click',async e=>{
+ e.preventDefault();
+ if(inboxBusy||!confirmConsultationLeave())return;
+ setInboxBusy(true);
+ try{await load();message('Updated.');}
+ catch(err){message(err.message,true);}
+ finally{setInboxBusy(false);}
+});
 $('cc-search').addEventListener('input',render);$('cc-filter').addEventListener('change',render);$('cc-assignment-filter').addEventListener('change',render);
 $('cc-stats').addEventListener('click',e=>{const card=e.target.closest('button.cc-status-filter');if(!card)return;const filter=$('cc-filter');const next=filter.value===card.dataset.status?'':card.dataset.status;if(next===filter.value)return;filter.value=next;render();});
 $('cc-detail').addEventListener('click',e=>{const toggle=e.target.closest('#cc-show-supplier-links');if(toggle){const host=$('cc-supplier-links');const opening=host.classList.contains('hidden');host.classList.toggle('hidden',!opening);toggle.setAttribute('aria-expanded',String(opening));toggle.textContent=opening?'Hide supplier listings ▴':'See supplier listings ▾';if(opening&&!host.dataset.loaded){host.dataset.loaded='1';const r=records.find(x=>x.id===selected);if(r)loadConsultationSupplierLinks(r,selected);}return;} });
 $('cc-detail').addEventListener('click',e=>{const b=e.target.closest('[data-copy-supplier-id]');if(b){e.preventDefault();navigator.clipboard?.writeText(b.dataset.copySupplierId||'');}});
 $('cc-list').addEventListener('click',e=>{const b=e.target.closest('[data-id]');if(b){e.preventDefault();const r=records.find(x=>x.id===b.dataset.id);if(r){if(r.id!==selected&&!confirmConsultationLeave())return;if(r.id!==selected)renderDetail(r);$('cc-list').querySelectorAll('.item').forEach(x=>x.classList.toggle('selected',x.dataset.id===r.id));}}});
 $('cc-detail').addEventListener('click',async e=>{
+ if(e.target.id==='cc-trash-action'){
+  const r=records.find(x=>x.id===selected);
+  if(inboxBusy||!r||!confirmConsultationLeave())return;
+  const restoring=viewingTrash;
+  const trashedAt=restoring?'eq.'+encodeURIComponent(r.trashed_at):'is.null';
+  setInboxBusy(true);
+  try{
+   const updated=await authorizedRequest(table('cc_consultations','id=eq.'+encodeURIComponent(r.id)+'&trashed_at='+trashedAt+'&select=id'),{
+    method:'PATCH',
+    body:{trashed_at:restoring?null:new Date().toISOString()},
+    headers:{Prefer:'return=representation'}
+   });
+   if(updated?.[0]?.id!==r.id)throw Error('This consultation may have been moved already. Refresh to check its current location.');
+   records=records.filter(x=>x.id!==r.id);
+   clearConsultation();
+   render();
+   message(restoring?'Consultation restored to the inbox.':'Consultation moved to Trash.');
+  }catch(err){message(err.message,true);}
+  finally{setInboxBusy(false);($('cc-trash-action')||trashToggle).focus();}
+  return;
+ }
  const editButton=e.target.closest('[data-note-edit]');
  const cancelButton=e.target.closest('[data-note-cancel]');
  const saveButton=e.target.closest('[data-note-save]');
@@ -817,17 +1016,12 @@ $('cc-detail').addEventListener('click',async e=>{
   const status=$('cc-status').value,handled_by=$('cc-handler').value.trim()||null;
   const buttons=[$('cc-save'),$('cc-save-top')].filter(Boolean);const indicator=$('cc-save-status');buttons.forEach(b=>b.disabled=true);indicator.textContent='Saving…';message('');
   try{
-   const updated=await authorizedRequest(table('cc_consultations','id=eq.'+encodeURIComponent(r.id)+'&select=id,status,handled_by'),{method:'PATCH',body:{status,handled_by},headers:{Prefer:'return=representation'}});
+   const updated=await authorizedRequest(table('cc_consultations','id=eq.'+encodeURIComponent(r.id)+'&trashed_at=is.null&select=id,status,handled_by'),{method:'PATCH',body:{status,handled_by},headers:{Prefer:'return=representation'}});
    if(!Array.isArray(updated)||updated.length!==1||updated[0].id!==r.id)throw Error('No consultation was updated. Check the Supabase UPDATE permission and RLS policy.');
    r.status=updated[0].status;r.handled_by=updated[0].handled_by;
    const currentId=selected;
    if(currentId===r.id){indicator.textContent='Changes saved';$('cc-status').value=r.status;$('cc-handler').value=r.handled_by||'';}
-   // Refresh the inbox and counters without rebuilding the detail panel.
-   const q=$('cc-search').value.toLowerCase().trim(),f=$('cc-filter').value,assignment=$('cc-assignment-filter').value;
-   $('cc-stats').innerHTML=statuses.map(name=>'<button type="button" class="card metric cc-status-filter" data-status="'+escape(name)+'" aria-pressed="'+String($('cc-filter').value===name)+'" title="Filter consultations by '+escape(name)+'"><strong>'+records.filter(x=>x.status===name).length+'</strong><span class="pill" data-status="'+escape(name)+'">'+escape(name)+'</span></button>').join('');
-   const shown=records.filter(x=>(!f||x.status===f)&&(!assignment||(assignment==='assigned'?!!String(x.handled_by||'').trim():!String(x.handled_by||'').trim()))&&(!q||[x.customer_name,x.customer_email,x.id,x.weapon_class,x.handled_by].some(v=>String(v||'').toLowerCase().includes(q))));
-   $('cc-list-count').textContent='('+shown.length+' of '+records.length+')';
- $('cc-list').innerHTML=shown.length?shown.map(x=>'<button type="button" class="item'+(selected===x.id?' selected':'')+'" data-id="'+escape(x.id)+'" data-status="'+escape(x.status)+'"><span class="pill" data-status="'+escape(x.status)+'">'+escape(x.status)+'</span> <strong>'+escape(x.customer_name)+'</strong><br><span class="muted">'+escape(x.weapon_class||'Consultation')+' · '+escape(new Date(x.created_at).toLocaleDateString())+'</span><br><span class="assignment-label'+(x.handled_by?'':' unassigned')+'">'+(x.handled_by?'Assigned: '+escape(x.handled_by):'Unassigned')+'</span>'+atomicAssuranceInbox(x.answers)+'</button>').join(''):'<p>No matching consultations.</p>';
+   render();
    message('Changes saved successfully.');
   }catch(err){if(selected===r.id)indicator.textContent='Not saved';message('Save failed: '+err.message,true)}finally{buttons.forEach(b=>b.disabled=false);}
  }

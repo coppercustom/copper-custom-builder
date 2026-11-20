@@ -7,3 +7,11 @@ Change the amount and currency in the `atomicAssurance` configuration in `copper
 The inline sample report contains fictional records. Its three sample links are illustrative and stay on the current page.
 
 Run `node --test tests/atomic-assurance.test.mjs` to verify the choices, submission data, and inbox display locally. During an approved rollout, check both choices through the hosted questionnaire and verify the saved record and notification.
+
+## Staff report workflow
+
+Open a consultation marked **Atomic Assurance: Requested** and expand **Atomic Assurance Build Report**. Enter the build reference, preparer, pickup and warranty dates, test date, inspection and test summaries, and the sound reading where applicable. Paste HTTPS sharing links for the torque document, witness-marking photos, test-fire footage, and target. Dropbox and other file hosts work with the same fields. Check each link with the intended recipient's permissions before sharing a report.
+
+Save as you go. The dashboard keeps one report per consultation and flags concurrent edits. Use **Preview / print report** to open the saved customer-facing copy and print or save it as a PDF. Internal consultation notes are excluded. Customer submissions and notifications do not read this table.
+
+For rollout, apply `supabase/migrations/202611200002_atomic_assurance_reports.sql` after the existing consultation Trash migration. Then point the customer and staff OpenCart loaders at the approved builder revision. Verify a requested consultation, staff save and reopen, preview links and print, and confirm a declined consultation has no editor.

@@ -89,3 +89,86 @@ test('both employee inbox scripts show the saved status and preserve legacy reco
     assert.equal(format('older unstructured answers'), '');
   }
 });
+
+test('employee reports require a request and print escaped fields and HTTPS links', () => {
+  const features = runInNewContext(builder.slice(builder.indexOf('function assuranceRequested('),
+    builder.indexOf('function renderAnswers(')) +
+    '\n({ assuranceRequested, assuranceLink, assuranceReportHtml })', {
+    URL,
+    escape: value => String(value ?? '').replace(/[<>&"]/g,
+      char => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' })[char])
+  });
+  assert.equal(features.assuranceRequested({ documentation_package_requested: true }), true);
+  assert.equal(features.assuranceRequested({ documentation_package_requested: false }), false);
+  assert.equal(features.assuranceRequested({ summary: [] }), false);
+  assert.equal(features.assuranceLink('https://www.dropbox.com/scl/fi/example?dl=0'),
+    'https://www.dropbox.com/scl/fi/example?dl=0');
+  for (const url of ['javascript:alert(1)', 'http://example.com', 'https://user:pass@example.com']) {
+    assert.equal(features.assuranceLink(url), '');
+  }
+  const html = features.assuranceReportHtml({ customer_name: '<b>Example</b>', id: 'example' }, {
+    torque_url: 'https://example.com/torque',
+    witness_url: 'https://example.com/witness',
+    footage_url: 'https://example.com/video',
+    target_url: 'https://example.com/target',
+    test_summary: '<script>example</script>',
+    sound_reading_db: 0
+  });
+  assert.match(html, /&lt;b&gt;Example&lt;\/b&gt;/);
+  assert.match(html, /&lt;script&gt;example&lt;\/script&gt;/);
+  assert.match(html, /0 dB/);
+  assert.equal((html.match(/href="https:\/\/example.com\//g) ?? []).length, 4);
+});
+
+test('staff can create and edit a report without overwriting a newer revision', async () => {
+  const save = {};
+  const print = {};
+  const status = {};
+  const listeners = new Map();
+  const inputs = new Map();
+  const body = {
+    addEventListener(type, listener) { listeners.set(type, listener); },
+    querySelector(selector) {
+      if (selector === '[data-assurance-save]') return save;
+      if (selector === '[data-assurance-print]') return print;
+      if (selector === '[data-assurance-status]') return status;
+      if (!inputs.has(selector)) inputs.set(selector, { value: '', validity: { valid: true } });
+      return inputs.get(selector);
+    },
+    querySelectorAll() { return [...inputs.values()]; }
+  };
+  for (const button of [save, print]) {
+    button.addEventListener = (type, listener) => { button[type] = listener; };
+  }
+  const panel = { querySelector: () => body, isConnected: true, dataset: {} };
+  const requests = [];
+  const responses = [[], [{ revision: 1 }], [{ revision: 2 }], []];
+  const open = runInNewContext(builder.slice(builder.indexOf('function assuranceRequested('),
+    builder.indexOf('function renderAnswers(')) + '\nopenAssuranceEditor', {
+    URL, escape: value => String(value), $: () => panel,
+    table: (name, query) => name + (query ? '?' + query : ''),
+    authorizedRequest: async (path, options) => {
+      requests.push({ path, options });
+      return responses.shift();
+    }
+  });
+  await open({ id: 'demo' });
+  assert.equal(print.disabled, true);
+  body.querySelector('#cc-assurance-footage_url').value = 'https://example.com/video';
+  listeners.get('input')();
+  await save.click();
+  assert.equal(requests[1].options.method, 'POST');
+  assert.equal(requests[1].options.body.footage_url, 'https://example.com/video');
+  assert.equal(print.disabled, false);
+  assert.equal(panel.dataset.dirty, 'false');
+  listeners.get('input')();
+  await save.click();
+  assert.match(requests[2].path, /revision=eq\.1$/);
+  assert.equal(requests[2].options.body.revision, 2);
+  listeners.get('input')();
+  await save.click();
+  assert.match(requests[3].path, /revision=eq\.2$/);
+  assert.match(status.textContent, /Another employee changed this report/);
+  assert.equal(panel.dataset.dirty, 'true');
+  assert.equal(print.disabled, true);
+});

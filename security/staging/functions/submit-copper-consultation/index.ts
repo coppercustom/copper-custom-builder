@@ -207,7 +207,7 @@ async function sendConsultationEmail(details: {
     'Automated notification from Copper Custom.'
   ].join('\r\n');
 
-  const message = [
+  const salesMessage = [
     `From: Copper Custom Notifications <${SENDER}>`,
     `To: ${SENDER}`,
     `Subject: ${subject}`,
@@ -217,12 +217,56 @@ async function sendConsultationEmail(details: {
     body
   ].join('\r\n');
 
+  const sends = [
+    sendGmailMessage(tokenData.access_token, salesMessage).catch(() => {
+      console.error('consultation_notification_failed');
+    })
+  ];
+
+  // Accept one bare mailbox. Never pass address lists or display names into the header.
+  const recipient = details.email;
+  const singleMailbox = /^[a-z0-9_+%-]+(?:\.[a-z0-9_+%-]+)*@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  if (Deno.env.get('SEND_CUSTOMER_CONSULTATION_SUMMARY') === 'true' &&
+      singleMailbox.test(recipient) && recipient.split('@')[0].length <= 64) {
+    const customerBody = [
+      'Thanks for contacting Copper Custom. We received your consultation request.',
+      '',
+      `Reference: ${details.reference}`,
+      `Build category: ${details.weaponClass}`,
+      `Preferred contact method: ${details.method}`,
+      '',
+      'Your submitted answers',
+      '------------------------------',
+      formatSummary(details.answers),
+      '',
+      'Reply to this email if you have any changes or questions.',
+      'If you did not submit this request, you can disregard this message.'
+    ].join('\r\n');
+    const customerMessage = [
+      `From: Copper Custom <${SENDER}>`,
+      `To: ${recipient}`,
+      `Reply-To: ${SENDER}`,
+      `Subject: ${safeHeader(`Copper Custom received your consultation - ${details.reference}`)}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/plain; charset="UTF-8"',
+      '',
+      customerBody
+    ].join('\r\n');
+    sends.push(sendGmailMessage(tokenData.access_token, customerMessage).catch(() => {
+      console.error('consultation_customer_confirmation_failed');
+    }));
+  }
+
+  await Promise.all(sends);
+}
+
+async function sendGmailMessage(accessToken: string, message: string) {
   const sendResponse = await fetch(
     'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
     {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${tokenData.access_token}`,
+        Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({

@@ -28,7 +28,10 @@ Deno.serve(async req => {
   if (!token) return respond(401, 'Sign in first.');
 
   try {
-    const db = createClient(env('SUPABASE_URL'), env('SUPABASE_SERVICE_ROLE_KEY'));
+    const db = createClient(env('SUPABASE_URL'), env('SUPABASE_ANON_KEY'), {
+      global: { headers: { Authorization: 'Bearer '+token } },
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
     const { data: auth } = await db.auth.getUser(token);
     if (!auth.user) return respond(401, 'Sign in again.');
     const { data: staff } = await db.from('cc_staff').select('user_id')
@@ -38,11 +41,15 @@ Deno.serve(async req => {
     if (typeof id !== 'string' || !/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(id) ||
         !Number.isSafeInteger(revision) || revision < 1) return respond(400, 'Invalid report reference.');
 
-    const { data: row, error } = await db.from('cc_atomic_assurance_reports')
-      .select('*, cc_consultations!inner(customer_name, customer_email, answers, trashed_at)')
-      .eq('consultation_id', id).eq('revision', revision).maybeSingle();
-    if (error) return respond(500, 'Unable to load the saved report.');
-    const customer = row?.cc_consultations;
+    const [reportResult, consultationResult] = await Promise.all([
+      db.from('cc_atomic_assurance_reports').select('*')
+        .eq('consultation_id', id).eq('revision', revision).maybeSingle(),
+      db.from('cc_consultations').select('customer_name, customer_email, answers, trashed_at')
+        .eq('id', id).maybeSingle()
+    ]);
+    if (reportResult.error || consultationResult.error) return respond(500, 'Unable to load the saved report.');
+    const row = reportResult.data;
+    const customer = consultationResult.data;
     if (!row || !customer || customer.trashed_at || customer.answers?.documentation_package_requested !== true) {
       return respond(409, 'Reopen the consultation and confirm the current report.');
     }

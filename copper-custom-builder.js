@@ -45,9 +45,15 @@ assuranceStyles.textContent=reportCss+`
 #cc-builder-v400 .cc-welcome-option{padding:14px 18px;border:1px solid #78624f;border-radius:8px;background:#241e1a;color:#f6e7da;font-size:15px}
 #cc-builder-v400 .cc-welcome-option strong{display:block;margin-bottom:4px;color:#f4c999;font-size:16px}
 #cc-builder-v400.cc-intro-mode .actions{border-top:0;background:transparent;padding-top:8px!important}
-#cc-builder-v400 .cc-documentation-package{width:100%;box-sizing:border-box;min-width:0;max-width:none}
-#cc-builder-v400 .cc-assurance-coverage{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;padding-left:22px}
-#cc-builder-v400 .cc-assurance-preview{margin:18px 0}
+#cc-builder-v400 .cc-documentation-package{width:100%;box-sizing:border-box;min-width:0;max-width:none;margin:24px 0;padding:clamp(16px,3vw,28px)}
+#cc-builder-v400 .cc-assurance-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+#cc-builder-v400 .cc-assurance-head h3{margin:0;color:#f9efe5;font:normal clamp(24px,4vw,33px)/1.15 Georgia,serif}
+#cc-builder-v400 .cc-assurance-price{flex:none;padding:4px 10px;border:1px solid #9d7656;border-radius:6px;color:#f5c89f;font-size:16px;font-weight:bold}
+#cc-builder-v400 .cc-documentation-package .cc-assurance-subtitle{font:inherit;font-size:15px;font-weight:bold;color:#f5e3d3;margin:0 0 8px}
+#cc-builder-v400 .cc-documentation-package .cc-assurance-note{font-size:14px;line-height:1.5;margin:10px 0 0}
+#cc-builder-v400 .cc-documentation-package .check-row{padding:10px 12px;font-size:14px;line-height:1.4}
+#cc-builder-v400 .cc-assurance-coverage{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;padding-left:18px;margin:0;font-size:14px}
+#cc-builder-v400 .cc-assurance-preview{margin:14px 0}
 #cc-builder-v400 .cc-assurance-preview summary{cursor:pointer;color:#efc99f;font-weight:700;margin-bottom:10px}
 @media(max-width:580px){#cc-builder-v400 .cc-welcome-options,#cc-builder-v400 .cc-assurance-coverage{grid-template-columns:1fr}}
 `;
@@ -230,12 +236,11 @@ function atomicAssuranceStatus(){
 }
 function atomicAssuranceHtml(){
  const coverage = ['One-year build warranty','Documented assembly torque specifications','Witness marking record and photos','Test-fire footage','A copy of the test target','Decibel reading for suppressed builds'];
- return `<fieldset class="cc-contact-next cc-documentation-package">
- <legend>${atomicAssurance.name} — ${atomicAssurancePrice}</legend>
- <p><strong>Precision. Protection. Proof.</strong></p>
- <h3>What the package covers</h3>
+ return `<div class="cc-contact-next cc-documentation-package" role="group" aria-labelledby="cc-assurance-title">
+ <div class="cc-assurance-head"><h3 id="cc-assurance-title">${atomicAssurance.name}</h3><span class="cc-assurance-price">${atomicAssurancePrice}</span></div>
+ <h4 class="cc-assurance-subtitle">What the package covers</h4>
  <ul class="cc-assurance-coverage">${coverage.map(item=>'<li>'+item+'</li>').join('')}</ul>
- <p>You’ll receive your completed report at pickup.</p>
+ <p class="cc-assurance-note">You’ll receive your completed report at pickup.</p>
  <details class="cc-assurance-preview"><summary>Preview a sample report</summary>
  ${reportMarkup('Jordan Ellis',{
   build_reference:'CCA-DEMO-014',pickup_date:'2026-11-14',warranty_end_date:'2027-11-14',
@@ -247,7 +252,7 @@ function atomicAssuranceHtml(){
  },true)}</details>`+
  '<label class="check-row"><input type="radio" name="cc-atomic-assurance" value="requested" required'+(contact.atomicAssuranceRequested===true?' checked':'')+'><span>Add '+atomicAssurance.name+' — '+atomicAssurancePrice+'</span></label>'+
  '<label class="check-row"><input type="radio" name="cc-atomic-assurance" value="declined" required'+(contact.atomicAssuranceRequested===false?' checked':'')+'><span>Continue Without '+atomicAssurance.name+'</span></label>'+
- '<p>Selecting '+atomicAssurance.name+' adds it to your consultation request. Your Copper Custom representative will arrange payment directly and confirm warranty terms.</p></fieldset>';
+ '<p class="cc-assurance-note">Selecting '+atomicAssurance.name+' adds it to your consultation request. Your Copper Custom representative will arrange payment directly and confirm warranty terms.</p></div>';
 }
 
 function summaryRows(){var rows=[['Category',state.category],['Firearm Type',state.firearmType],['Action',state.firearmAction],['Pistol Type',state.pistolType],['Pistol Firing Mechanism',state.pistolMechanism],['Pistol Trigger Action',state.pistolTriggerAction],['Other Pistol Type',state.pistolOtherType],['Shotgun Category',state.shotgunPurpose],['Shotgun Action',state.shotgunAction],['Shotgun Feeding System',state.shotgunAction==='Semi-Auto'?state.shotgunFeed:''],['Primary Intended Uses',state.purpose.join(', ')],['Other Intended Use',state.purpose.indexOf('Other')!==-1?state.purposeOther:''],['Approximate Budget',state.budget],['Desired Goals',state.goals]];rows=rows.concat([['Optic Type',state.optics.interest==='Yes'?state.optics.opticType:''],['Suppressor Design',state.suppressors.interest==='Yes'?state.suppressors.design:''],['Suppressor Material',state.suppressors.interest==='Yes'?state.suppressors.material:'']]);rows=rows.concat(sectionRows('primary','Primary Product'),sectionRows('optics','Optics'),sectionRows('lights','Weapon Lights'),sectionRows('suppressors','Suppressors'));extraTopics.forEach(function(t){var a=state.extras[t.id];rows.push([t.name,a.answer||'Not answered']);if(a.answer==='Yes'&&a.notes.trim())rows.push([t.name+' · Notes',a.notes]);});rows.push(['General Additional Notes',state.notes]);rows.push(['Representative Preference',contact.representativeChoice==='preferred'?'Preferred representative':contact.representativeChoice==='first'?'First available representative':'']);if(contact.representativeChoice==='preferred')rows.push(['Requested Representative',contact.preferredRepresentative.trim()]);rows.unshift([atomicAssurance.name,atomicAssuranceStatus()]);return rows.filter(function(r){return !!r[1];});}

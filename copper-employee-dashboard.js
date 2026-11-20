@@ -47,6 +47,11 @@ async function load(){
  if(!staff.some(x=>x.user_id===currentUser?.id))throw Error('This account is not authorized as an active employee.');
  records=c||[];render();
 }
+function atomicAssuranceInbox(answers){
+ if(typeof answers==='string'){try{answers=JSON.parse(answers)}catch{return '';}}
+ const status=Array.isArray(answers?.summary)?answers.summary.find(row=>row?.label==='Atomic Assurance')?.value:null;
+ return typeof status==='string'?'<br><strong>Atomic Assurance: '+escape(status)+'</strong>':'';
+}
 function renderAnswers(answers){
  let a=answers;if(typeof a==='string'){try{a=JSON.parse(a)}catch(e){return '<div class="answer-card"><div class="answer-value">'+escape(a)+'</div></div>'}}
  let entries=[];
@@ -75,7 +80,7 @@ function render(){
  const q=$('cc-search').value.toLowerCase().trim(),f=$('cc-filter').value,assignment=$('cc-assignment-filter').value;
  const shown=records.filter(r=>(!f||r.status===f)&&(!assignment||(assignment==='assigned'?!!String(r.handled_by||'').trim():!String(r.handled_by||'').trim()))&&(!q||[r.customer_name,r.customer_email,r.id,r.weapon_class,r.handled_by].some(v=>String(v||'').toLowerCase().includes(q))));
  $('cc-list-count').textContent='('+shown.length+' of '+records.length+')';
- $('cc-list').innerHTML=shown.length?shown.map(r=>'<button type="button" class="item'+(selected===r.id?' selected':'')+'" data-id="'+escape(r.id)+'" data-status="'+escape(r.status)+'"><span class="pill" data-status="'+escape(r.status)+'">'+escape(r.status)+'</span> <strong>'+escape(r.customer_name)+'</strong><br><span class="muted">'+escape(r.weapon_class||'Consultation')+' · '+escape(new Date(r.created_at).toLocaleDateString())+'</span><br><span class="assignment-label'+(r.handled_by?'':' unassigned')+'">'+(r.handled_by?'Assigned: '+escape(r.handled_by):'Unassigned')+'</span></button>').join(''):'<p>No matching consultations.</p>';
+ $('cc-list').innerHTML=shown.length?shown.map(r=>'<button type="button" class="item'+(selected===r.id?' selected':'')+'" data-id="'+escape(r.id)+'" data-status="'+escape(r.status)+'"><span class="pill" data-status="'+escape(r.status)+'">'+escape(r.status)+'</span> <strong>'+escape(r.customer_name)+'</strong><br><span class="muted">'+escape(r.weapon_class||'Consultation')+' · '+escape(new Date(r.created_at).toLocaleDateString())+'</span><br><span class="assignment-label'+(r.handled_by?'':' unassigned')+'">'+(r.handled_by?'Assigned: '+escape(r.handled_by):'Unassigned')+'</span>'+atomicAssuranceInbox(r.answers)+'</button>').join(''):'<p>No matching consultations.</p>';
  if(selected){const r=records.find(x=>x.id===selected);if(r&&$('cc-detail').dataset.consultationId!==String(r.id))renderDetail(r);else if(!r) $('cc-detail').innerHTML='<p>Select a consultation to review.</p>';}
 }
 async function renderDetail(r){
@@ -415,7 +420,7 @@ $('cc-detail').addEventListener('click',async e=>{
    $('cc-stats').innerHTML=statuses.map(name=>'<button type="button" class="card metric cc-status-filter" data-status="'+escape(name)+'" aria-pressed="'+String($('cc-filter').value===name)+'" title="Filter consultations by '+escape(name)+'"><strong>'+records.filter(x=>x.status===name).length+'</strong><span class="pill" data-status="'+escape(name)+'">'+escape(name)+'</span></button>').join('');
    const shown=records.filter(x=>(!f||x.status===f)&&(!assignment||(assignment==='assigned'?!!String(x.handled_by||'').trim():!String(x.handled_by||'').trim()))&&(!q||[x.customer_name,x.customer_email,x.id,x.weapon_class,x.handled_by].some(v=>String(v||'').toLowerCase().includes(q))));
    $('cc-list-count').textContent='('+shown.length+' of '+records.length+')';
- $('cc-list').innerHTML=shown.length?shown.map(x=>'<button type="button" class="item'+(selected===x.id?' selected':'')+'" data-id="'+escape(x.id)+'" data-status="'+escape(x.status)+'"><span class="pill" data-status="'+escape(x.status)+'">'+escape(x.status)+'</span> <strong>'+escape(x.customer_name)+'</strong><br><span class="muted">'+escape(x.weapon_class||'Consultation')+' · '+escape(new Date(x.created_at).toLocaleDateString())+'</span><br><span class="assignment-label'+(x.handled_by?'':' unassigned')+'">'+(x.handled_by?'Assigned: '+escape(x.handled_by):'Unassigned')+'</span></button>').join(''):'<p>No matching consultations.</p>';
+ $('cc-list').innerHTML=shown.length?shown.map(x=>'<button type="button" class="item'+(selected===x.id?' selected':'')+'" data-id="'+escape(x.id)+'" data-status="'+escape(x.status)+'"><span class="pill" data-status="'+escape(x.status)+'">'+escape(x.status)+'</span> <strong>'+escape(x.customer_name)+'</strong><br><span class="muted">'+escape(x.weapon_class||'Consultation')+' · '+escape(new Date(x.created_at).toLocaleDateString())+'</span><br><span class="assignment-label'+(x.handled_by?'':' unassigned')+'">'+(x.handled_by?'Assigned: '+escape(x.handled_by):'Unassigned')+'</span>'+atomicAssuranceInbox(x.answers)+'</button>').join(''):'<p>No matching consultations.</p>';
    message('Changes saved successfully.');
   }catch(err){if(selected===r.id)indicator.textContent='Not saved';message('Save failed: '+err.message,true)}finally{buttons.forEach(b=>b.disabled=false);}
  }

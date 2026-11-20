@@ -9,3 +9,12 @@ November 20, 2026. Production rollout authorized. The live search v16 and intake
 - Operational alert delivery is a separate follow-up. Keep alerts out of the consultation sales inbox.
 
 Continue from the [release runbook](README.md) after securely configuring the Edge secrets. For rollback, redeploy the captured search v16 bundle. Its existing limiter was preserved.
+
+## Intake rollout and gateway verification
+
+After the production Edge configuration was saved, a search smoke request returned 60 categories and recorded a gateway bucket in the current database window. The prior intake bundle was active as v10 with the same hash as v9. Captured it for rollback and deployed the staged intake bundle as v11 with its existing public JWT setting.
+
+- Both production origins passed intake preflight with 204.
+- A missing Turnstile token returned 400. A synthetic invalid token reached the limiter and Turnstile, then returned 403. The database recorded a gateway bucket and zero rows matching the synthetic smoke fixture.
+- These live checks stopped before inserting a consultation or attempting email delivery. Successful submission and simulated mail delivery passed in hosted staging. A successful customer submission and Gmail delivery have not been exercised in production by this rollout.
+- Operational email alert delivery is still pending. Production intake rollback is to redeploy the captured prior bundle, with hash `9e7916b6c8a9770ff0c42432f7a8e2f86046ad33a3e4f33d465bb13da3ea5beb`.

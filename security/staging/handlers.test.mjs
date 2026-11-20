@@ -87,7 +87,11 @@ globalThis.fetch = async (url, init) => {
     return Response.json({ access_token: 'fixture' });
   }
   assert.equal(target.hostname, 'gmail.googleapis.com');
-  calls.push(['gmail']);
+  const message = Buffer.from(JSON.parse(init.body).raw, 'base64url').toString('utf8');
+  calls.push(['gmail', message]);
+  if (notification === 'customer-failure' && message.includes('To: test@example.invalid\r\n')) {
+    return new Response(null, { status: 502 });
+  }
   return Response.json({});
 };
 
@@ -98,6 +102,7 @@ test.beforeEach(() => {
   stored = [];
   verification = 'ok';
   notification = 'ok';
+  env.delete('SEND_CUSTOMER_CONSULTATION_SUMMARY');
 });
 
 const payload = {
@@ -200,4 +205,38 @@ test('successful intake saves once and OAuth timeout preserves the 201', async (
   assert.deepEqual(await response.json(), { success: true, reference: 'synthetic-id' });
   assert.equal(stored.length, 1);
   assert.deepEqual(calls.slice(1), [['turnstile', '192.0.2.4'], ['oauth']]);
+});
+
+test('customer summary is opt-in at deployment and uses a separate message', async () => {
+  assert.equal((await intake(post(payload, client))).status, 201);
+  assert.equal(calls.filter(([kind]) => kind === 'gmail').length, 1);
+  calls = [];
+  env.set('SEND_CUSTOMER_CONSULTATION_SUMMARY', 'true');
+  const response = await intake(post({
+    ...payload, answers: { ...payload.answers, summary: [{ label: 'Notes', value: 'Synthetic café' }] },
+  }, client));
+  assert.equal(response.status, 201);
+  assert.equal(calls.filter(([kind]) => kind === 'oauth').length, 1);
+  const [sales, customer] = calls.filter(([kind]) => kind === 'gmail').map(([, raw]) => raw);
+  assert.match(sales, /To: sales@coppercustom.com/);
+  assert.match(customer, /To: test@example.invalid\r\nReply-To: sales@coppercustom.com/);
+  assert.match(customer, /Reference: synthetic-id/);
+  assert.match(customer, /Notes: Synthetic café/);
+  assert.doesNotMatch(customer, /employee dashboard|202-555-0100/);
+});
+
+test('customer delivery failure does not affect saved consultation or Sales send', async () => {
+  env.set('SEND_CUSTOMER_CONSULTATION_SUMMARY', 'true');
+  notification = 'customer-failure';
+  assert.equal((await intake(post(payload, client))).status, 201);
+  assert.equal(stored.length, 1);
+  assert.equal(calls.filter(([kind]) => kind === 'gmail').length, 2);
+});
+
+test('customer confirmation never sends an address list', async () => {
+  env.set('SEND_CUSTOMER_CONSULTATION_SUMMARY', 'true');
+  await intake(post({ ...payload, customer_email: 'one@example.invalid,two@example.invalid' }, client));
+  const messages = calls.filter(([kind]) => kind === 'gmail');
+  assert.equal(messages.length, 1);
+  assert.ok(messages[0][1].includes('To: sales@coppercustom.com\r\n'));
 });

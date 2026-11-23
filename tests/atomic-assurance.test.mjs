@@ -50,7 +50,7 @@ test('the questionnaire shows the flat price, both choices, and a sample preview
   assert.match(intro, /cc-assurance-aside"><strong>Atomic Assurance/);
   assert.doesNotMatch(intro, /\$100|Add Atomic Assurance|Continue Without Atomic Assurance|Preview a sample report|cc-atomic-assurance/);
   const review = page.reviewHtml();
-  assert.match(review, /id="cc-assurance-title">Atomic Assurance<\/h3><span class="cc-assurance-price">\$100/);
+  assert.match(review, /id="cc-assurance-title">Atomic Assurance<\/h3><div class="cc-assurance-price">\$100/);
   assert.match(review, /Add Atomic Assurance — \$100/);
   assert.match(review, /Continue Without Atomic Assurance/);
   assert.match(review, /What the package covers/);

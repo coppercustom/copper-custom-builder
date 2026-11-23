@@ -46,9 +46,9 @@ assuranceStyles.textContent=reportCss+`
 #cc-builder-v400 .cc-welcome-option strong{display:block;margin-bottom:4px;color:#f4c999;font-size:16px}
 #cc-builder-v400.cc-intro-mode .actions{border-top:0;background:transparent;padding-top:8px!important}
 #cc-builder-v400 .cc-documentation-package{width:100%;box-sizing:border-box;min-width:0;max-width:none;margin:24px 0;padding:clamp(16px,3vw,28px)}
-#cc-builder-v400 .cc-assurance-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
-#cc-builder-v400 .cc-assurance-head h3{margin:0;color:#f9efe5;font:normal clamp(24px,4vw,33px)/1.15 Georgia,serif}
-#cc-builder-v400 .cc-assurance-price{flex:none;padding:4px 10px;border:1px solid #9d7656;border-radius:6px;color:#f5c89f;font-size:16px;font-weight:bold}
+#cc-builder-v400 .cc-assurance-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 12px;margin-bottom:12px}
+#cc-builder-v400 .cc-assurance-head h3{min-width:0;margin:0;color:#f9efe5;font:normal clamp(24px,4vw,33px)/1.15 Georgia,serif}
+#cc-builder-v400 .cc-assurance-price{display:inline-flex;flex:0 0 auto;width:auto;inline-size:max-content;max-width:100%;white-space:nowrap;align-items:center;padding:4px 10px;border:1px solid #9d7656;border-radius:6px;color:#f5c89f;font-size:16px;font-weight:bold}
 #cc-builder-v400 .cc-documentation-package .cc-assurance-subtitle{font:inherit;font-size:15px;font-weight:bold;color:#f5e3d3;margin:0 0 8px}
 #cc-builder-v400 .cc-documentation-package .cc-assurance-note{font-size:14px;line-height:1.5;margin:10px 0 0}
 #cc-builder-v400 .cc-documentation-package .check-row{padding:10px 12px;font-size:14px;line-height:1.4}
@@ -237,7 +237,7 @@ function atomicAssuranceStatus(){
 function atomicAssuranceHtml(){
  const coverage = ['One-year build warranty','Documented assembly torque specifications','Witness marking record and photos','Test-fire footage','A copy of the test target','Decibel reading for suppressed builds'];
  return `<div class="cc-contact-next cc-documentation-package" role="group" aria-labelledby="cc-assurance-title">
- <div class="cc-assurance-head"><h3 id="cc-assurance-title">${atomicAssurance.name}</h3><span class="cc-assurance-price">${atomicAssurancePrice}</span></div>
+ <div class="cc-assurance-head"><h3 id="cc-assurance-title">${atomicAssurance.name}</h3><div class="cc-assurance-price">${atomicAssurancePrice}</div></div>
  <h4 class="cc-assurance-subtitle">What the package covers</h4>
  <ul class="cc-assurance-coverage">${coverage.map(item=>'<li>'+item+'</li>').join('')}</ul>
  <p class="cc-assurance-note">You’ll receive your completed report at pickup.</p>

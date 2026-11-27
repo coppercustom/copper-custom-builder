@@ -1,0 +1,51 @@
+name: Staging health check
+on:
+  schedule:
+    - cron: '23 15 * * 1,4'
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: staging-health-check
+  cancel-in-progress: false
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check staging database path and request validation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import urllib.request
+          import urllib.error
+
+          base = "https://bllfomhyrepvwncrqmgl.supabase.co/functions/v1/"
+          origin = "https://coppercustom.com"
+
+          def check(label, endpoint, method, expected, payload=None, allowed_origin=origin, predicate=None):
+              req = urllib.request.Request(base + endpoint, method=method,
+                  headers={"Origin": allowed_origin, "Content-Type": "application/json"},
+                  data=None if payload is None else json.dumps(payload).encode())
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as res:
+                      status, body = res.status, res.read()
+              except urllib.error.HTTPError as res:
+                  status, body = res.code, res.read()
+              if status != expected:
+                  raise RuntimeError(f"{label}: expected {expected}, got {status}")
+              if predicate and not predicate(json.loads(body)):
+                  raise RuntimeError(f"{label}: unexpected response")
+              print(f"PASS: {label} ({status})")
+
+          check("Database-backed staging read", "public-lipseys-search", "POST", 200,
+                {"action": "categories"},
+                predicate=lambda x: x.get("success") is True and isinstance(x.get("categories"), list))
+          check("Invalid action rejected", "public-lipseys-search", "POST", 400,
+                {"action": "health-check-invalid"},
+                predicate=lambda x: x.get("error") == "Invalid action")
+          check("Unapproved origin rejected", "submit-copper-consultation", "OPTIONS", 403,
+                allowed_origin="https://example.invalid")
+          check("Invalid consultation rejected", "submit-copper-consultation", "POST", 400, {},
+                predicate=lambda x: x.get("error") == "Please provide valid contact details")
+          PY
